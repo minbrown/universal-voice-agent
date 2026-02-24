@@ -167,24 +167,58 @@ app.post("/api/book", async (req, res) => {
  */
 app.post("/retell/check_availability", async (req, res) => {
     console.log("\n🤖 AI SEARCHING SLOTS...");
+    const { args } = req.body;
+    const phone = args?.phone;
+    const email = args?.email;
+
     const calendarId = process.env.GHL_CALENDAR_ID;
     const now = new Date();
-    const future = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000)); // AI only looks 7 days ahead
-
-    const url = `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots?startDate=${now.getTime()}&endDate=${future.getTime()}`;
+    const future = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
 
     try {
-        const response = await fetch(url, { headers: getGhlHeaders() });
-        const data = await response.json();
+        // 1. Fetch free slots
+        const slotsUrl = `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots?startDate=${now.getTime()}&endDate=${future.getTime()}`;
+        const slotsRes = await fetch(slotsUrl, { headers: getGhlHeaders() });
+        const slotsData = await slotsRes.json();
 
-        let allSlots = [];
-        Object.keys(data).forEach(day => {
-            if (data[day]?.slots) allSlots.push(...data[day].slots);
+        let availableSlots = [];
+        Object.keys(slotsData).forEach(day => {
+            if (slotsData[day]?.slots) availableSlots.push(...slotsData[day].slots);
         });
 
-        console.log(`🤖 AI found ${allSlots.length} options.`);
-        res.json({ available_slots: allSlots.slice(0, 5) }); // Give AI 5 clean options
+        // 2. Identify caller to check for existing appointment
+        let contactId = null;
+        let existingAppt = null;
+
+        if (phone || email) {
+            const searchKey = phone ? "number" : "email";
+            const searchVal = phone || email;
+            const searchUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&${searchKey}=${encodeURIComponent(searchVal)}`;
+            const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
+            const sData = await sRes.json();
+            contactId = sData?.contact?.id;
+
+            if (contactId) {
+                const apptUrl = `https://services.leadconnectorhq.com/calendars/events/appointments?locationId=${process.env.GHL_LOCATION_ID}&contactId=${contactId}&calendarId=${calendarId}`;
+                const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
+                const aData = await aRes.json();
+                existingAppt = (aData?.events || []).find(e => e.status === 'booked' || e.status === 'confirmed');
+            }
+        }
+
+        console.log(`🤖 AI found ${availableSlots.length} options.`);
+        if (existingAppt) console.log(`   Recognized existing appointment: ${existingAppt.startTime}`);
+
+        res.json({
+            available_slots: availableSlots.slice(0, 5),
+            current_appointment: existingAppt ? {
+                id: existingAppt.id,
+                time: existingAppt.startTime,
+                status: existingAppt.status
+            } : null
+        });
     } catch (err) {
+        console.error("❌ Availability Error:", err.message);
         res.status(500).json({ error: "GHL sync failed" });
     }
 });
