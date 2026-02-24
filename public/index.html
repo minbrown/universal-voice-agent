@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GHL Scheduler Debugger</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --card: #141414;
+            --accent: #ffffff;
+            --text: #ffffff;
+            --muted: #888888;
+            --border: rgba(255, 255, 255, 0.1);
+            --success: #00ff88;
+            --error: #ff4444;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 500px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 40px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+        }
+
+        h1 { font-size: 24px; margin-bottom: 8px; font-weight: 700; letter-spacing: -0.5px; }
+        p.subtitle { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
+
+        .form-group { margin-bottom: 20px; text-align: left; }
+        label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
+        
+        input, select {
+            width: 100%;
+            padding: 14px 18px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: white;
+            font-size: 15px;
+            font-family: inherit;
+            transition: 0.2s;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: var(--accent);
+            background: rgba(255,255,255,0.08);
+        }
+
+        .btn {
+            width: 100%;
+            padding: 16px;
+            background: var(--accent);
+            color: black;
+            border: none;
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-top: 10px;
+        }
+
+        .btn:hover { transform: translateY(-2px); opacity: 0.9; }
+        .btn:active { transform: translateY(0); }
+        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .status {
+            margin-top: 24px;
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            display: none;
+            word-break: break-all;
+        }
+
+        .status.success { display: block; background: rgba(0, 255, 136, 0.1); border: 1px solid var(--success); color: var(--success); }
+        .status.error { display: block; background: rgba(255, 68, 68, 0.1); border: 1px solid var(--error); color: var(--error); }
+
+        .loader {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            display: none;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>GHL Scheduler Debugger</h1>
+        <p class="subtitle">Test availability and booking logic instantly.</p>
+
+        <div class="form-group">
+            <button class="btn" id="load-slots-btn" style="background: rgba(255,255,255,0.1); color: white; border: 1px solid var(--border);">
+                1. Load Available Slots
+            </button>
+        </div>
+
+        <div id="booking-section" style="display: none; border-top: 1px solid var(--border); padding-top: 24px; margin-top: 24px;">
+            <div class="form-group">
+                <label>Available Slots</label>
+                <select id="slot-select"></select>
+            </div>
+            <div class="form-group">
+                <label>First Name</label>
+                <input type="text" id="firstName" placeholder="John">
+            </div>
+            <div class="form-group">
+                <label>Email Address</label>
+                <input type="email" id="email" placeholder="john@example.com">
+            </div>
+            <button class="btn" id="book-btn">2. Confirm Booking</button>
+        </div>
+
+        <div id="status-box" class="status"></div>
+    </div>
+
+    <script>
+        const loadBtn = document.getElementById('load-slots-btn');
+        const bookBtn = document.getElementById('book-btn');
+        const slotSelect = document.getElementById('slot-select');
+        const bookingSection = document.getElementById('booking-section');
+        const statusBox = document.getElementById('status-box');
+
+        const showStatus = (msg, type) => {
+            statusBox.innerText = msg;
+            statusBox.className = 'status ' + type;
+        };
+
+        loadBtn.onclick = async () => {
+            loadBtn.disabled = true;
+            loadBtn.innerText = 'Loading...';
+            showStatus('Fetching slots from GHL...', '');
+
+            try {
+                const res = await fetch('/api/slots');
+                const data = await res.json();
+
+                if (!res.ok) throw new Error(data.error || 'Failed to fetch slots');
+
+                if (data.slots.length === 0) {
+                    showStatus('No free slots found in the next 14 days.', 'error');
+                } else {
+                    slotSelect.innerHTML = data.slots.map(s => {
+                        const date = new Date(s);
+                        return `<option value="${s}">${date.toLocaleString()}</option>`;
+                    }).join('');
+                    bookingSection.style.display = 'block';
+                    loadBtn.innerText = 'Slots Loaded ✅';
+                    statusBox.style.display = 'none';
+                }
+            } catch (err) {
+                showStatus(err.message, 'error');
+                loadBtn.disabled = false;
+                loadBtn.innerText = '1. Load Available Slots';
+            }
+        };
+
+        bookBtn.onclick = async () => {
+            const firstName = document.getElementById('firstName').value;
+            const email = document.getElementById('email').value;
+            const slot = slotSelect.value;
+
+            if (!firstName || !email) return alert('Name and Email required');
+
+            bookBtn.disabled = true;
+            bookBtn.innerText = 'Booking...';
+            showStatus('Processing booking...', '');
+
+            try {
+                const res = await fetch('/api/book', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ firstName, email, slot })
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) throw new Error(data.error || 'Booking failed');
+
+                showStatus('🚀 SUCCESS! Appointment confirmed in GHL!', 'success');
+                bookBtn.innerText = 'Confirmed! ✅';
+            } catch (err) {
+                showStatus('GHL Error: ' + err.message, 'error');
+                bookBtn.disabled = false;
+                bookBtn.innerText = '2. Confirm Booking';
+            }
+        };
+    </script>
+</body>
+</html>
