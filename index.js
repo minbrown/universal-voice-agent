@@ -279,13 +279,18 @@ app.post("/retell/book_appointment", async (req, res) => {
 
         // 4. Check for existing appointments in this calendar
         console.log("📅 Checking for existing appointments...");
-        const apptSearchUrl = `https://services.leadconnectorhq.com/calendars/events/appointments?locationId=${process.env.GHL_LOCATION_ID}&contactId=${contactId}&calendarId=${process.env.GHL_CALENDAR_ID}`;
+        const startSearch = new Date();
+        startSearch.setHours(0, 0, 0, 0);
+        const endSearch = new Date();
+        endSearch.setDate(endSearch.getDate() + 30);
+
+        const apptSearchUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${process.env.GHL_CALENDAR_ID}&startTime=${startSearch.getTime()}&endTime=${endSearch.getTime()}`;
         const apptSearchRes = await fetch(apptSearchUrl, { headers: getGhlHeaders() });
         const apptSearchData = await apptSearchRes.json();
 
-        // Find if there's an active/upcoming appointment
+        // Find if there's an active/upcoming appointment FOR THIS CONTACT
         const existingAppt = (apptSearchData?.events || []).find(e =>
-            e.calendarId === process.env.GHL_CALENDAR_ID &&
+            e.contactId === contactId &&
             (e.status === 'booked' || e.status === 'confirmed')
         );
 
