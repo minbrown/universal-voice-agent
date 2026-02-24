@@ -191,29 +191,47 @@ app.post("/retell/check_availability", async (req, res) => {
 
 app.post("/retell/book_appointment", async (req, res) => {
     console.log("\n🤖 AI BOOKING ATTEMPT...");
-    // AI sends args inside a body
     const { args } = req.body;
-    const firstName = args.first_name || args.firstName;
+    const firstName = args.first_name || args.firstName || "Unknown";
     const email = args.email;
     const phone = args.phone;
     const slot = args.date_time || args.dateTime;
 
-    try {
-        // Find/Upsert Contact
-        const searchUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`;
-        const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
-        const sData = await sRes.json();
-        let contactId = sData?.contact?.id;
+    if (!slot) {
+        return res.status(400).json({ error: "Missing slot/date_time" });
+    }
 
+    try {
+        let contactId = null;
+
+        // 1. Search by Phone first
+        if (phone) {
+            console.log(`👤 Searching contact by phone: ${phone}`);
+            const phoneSearchUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(phone)}`;
+            const pRes = await fetch(phoneSearchUrl, { headers: getGhlHeaders() });
+            const pData = await pRes.json();
+            contactId = pData?.contact?.id;
+        }
+
+        // 2. Fallback to Email search
+        if (!contactId && email) {
+            console.log(`👤 Searching contact by email: ${email}`);
+            const emailSearchUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`;
+            const eRes = await fetch(emailSearchUrl, { headers: getGhlHeaders() });
+            const eData = await eRes.json();
+            contactId = eData?.contact?.id;
+        }
+
+        // 3. Upsert Contact Info
         if (contactId) {
-            console.log("   Updating existing contact with phone...");
+            console.log("   Found existing contact. Syncing info...");
             await fetch(`https://services.leadconnectorhq.com/contacts/${contactId}`, {
                 method: "PUT",
                 headers: getGhlHeaders(),
                 body: JSON.stringify({ firstName, email, phone, locationId: process.env.GHL_LOCATION_ID })
             });
         } else {
-            console.log("   Creating new contact with phone...");
+            console.log("   Creating new contact...");
             const cRes = await fetch("https://services.leadconnectorhq.com/contacts/", {
                 method: "POST",
                 headers: getGhlHeaders(),
@@ -223,32 +241,68 @@ app.post("/retell/book_appointment", async (req, res) => {
             contactId = cData?.contact?.id;
         }
 
-        // Finalize Booking
-        const bookRes = await fetch("https://services.leadconnectorhq.com/calendars/events/appointments", {
-            method: "POST",
-            headers: getGhlHeaders("2021-04-15"),
-            body: JSON.stringify({
-                calendarId: process.env.GHL_CALENDAR_ID,
-                locationId: process.env.GHL_LOCATION_ID,
-                contactId,
-                startTime: new Date(slot).toISOString(),
-                endTime: new Date(new Date(slot).getTime() + 30 * 60000).toISOString(),
-                title: `Voice AI Booking: ${firstName}`,
-                appointmentStatus: "confirmed",
-                assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
-                ignoreFreeSlotValidation: true
-            })
-        });
+        if (!contactId) throw new Error("Failed to resolve contact ID");
+
+        // 4. Check for existing appointments in this calendar
+        console.log("📅 Checking for existing appointments...");
+        const apptSearchUrl = `https://services.leadconnectorhq.com/calendars/events/appointments?locationId=${process.env.GHL_LOCATION_ID}&contactId=${contactId}&calendarId=${process.env.GHL_CALENDAR_ID}`;
+        const apptSearchRes = await fetch(apptSearchUrl, { headers: getGhlHeaders() });
+        const apptSearchData = await apptSearchRes.json();
+
+        // Find if there's an active/upcoming appointment
+        const existingAppt = (apptSearchData?.events || []).find(e =>
+            e.calendarId === process.env.GHL_CALENDAR_ID &&
+            (e.status === 'booked' || e.status === 'confirmed')
+        );
+
+        const startTime = new Date(slot).toISOString();
+        const endTime = new Date(new Date(slot).getTime() + 30 * 60000).toISOString();
+
+        let bookRes;
+        if (existingAppt) {
+            console.log(`🔄 Rescheduling existing appointment: ${existingAppt.id}`);
+            const updateUrl = `https://services.leadconnectorhq.com/calendars/events/appointments/${existingAppt.id}`;
+            bookRes = await fetch(updateUrl, {
+                method: "PUT",
+                headers: getGhlHeaders("2021-04-15"),
+                body: JSON.stringify({
+                    startTime,
+                    endTime,
+                    title: `Voice AI Update: ${firstName}`,
+                })
+            });
+        } else {
+            console.log("🆕 Booking new appointment...");
+            bookRes = await fetch("https://services.leadconnectorhq.com/calendars/events/appointments", {
+                method: "POST",
+                headers: getGhlHeaders("2021-04-15"),
+                body: JSON.stringify({
+                    calendarId: process.env.GHL_CALENDAR_ID,
+                    locationId: process.env.GHL_LOCATION_ID,
+                    contactId,
+                    startTime,
+                    endTime,
+                    title: `Voice AI Booking: ${firstName}`,
+                    appointmentStatus: "confirmed",
+                    assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
+                    ignoreFreeSlotValidation: true
+                })
+            });
+        }
 
         const bData = await bookRes.json();
         if (bookRes.ok) {
             console.log("🤖 AI BOOKING SUCCESS!");
-            res.json({ status: "success", message: "Appointment confirmed!" });
+            res.json({
+                status: "success",
+                message: existingAppt ? "Appointment rescheduled successfully!" : "Appointment confirmed!"
+            });
         } else {
             console.error("🤖 GHL REJECTED AI:", bData);
-            res.status(400).json({ error: bData.message });
+            res.status(400).json({ error: bData.message || "Booking failed" });
         }
     } catch (e) {
+        console.error("❌ Fatal Error:", e.message);
         res.status(500).json({ error: e.message });
     }
 });
