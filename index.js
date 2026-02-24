@@ -387,6 +387,11 @@ app.post("/retell/cancel_appointment", async (req, res) => {
     }
 });
 
+app.post("/retell/end_call", async (req, res) => {
+    console.log("\n👋 AI ENDING CALL...");
+    res.json({ status: "success", message: "Call ended successfully." });
+});
+
 app.listen(PORT, () => {
     console.log(`\n🚀 GHL Scheduler Debug App running at http://localhost:${PORT}`);
     console.log(`📁 Serving files from: ${join(__dirname, "public")}`);
