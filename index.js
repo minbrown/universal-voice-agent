@@ -262,6 +262,9 @@ app.post("/retell/check_availability", async (req, res) => {
                     const events = megaData?.events || [];
 
                     for (const event of events) {
+                        const status = (event.appointmentStatus || event.status || "").toLowerCase();
+                        if (status !== 'booked' && status !== 'confirmed' && status !== 'new') continue;
+
                         // 1. Check title/address directly
                         const eventStr = JSON.stringify(event).toLowerCase();
                         if (eventStr.includes(cleanPhone)) {
@@ -427,6 +430,9 @@ app.post("/retell/book_appointment", async (req, res) => {
                     const events = megaData?.events || [];
 
                     for (const event of events) {
+                        const status = (event.appointmentStatus || event.status || "").toLowerCase();
+                        if (status !== 'booked' && status !== 'confirmed' && status !== 'new') continue;
+
                         if (JSON.stringify(event).includes(cleanPhone)) {
                             existing = event;
                             addDebugLog(`🏆 Mega Scanner SAVED Auto-Reschedule: ${existing.id}`);
@@ -554,6 +560,9 @@ app.post("/retell/cancel_appointment", async (req, res) => {
                 const events = megaData?.events || [];
 
                 for (const event of events) {
+                    const status = (event.appointmentStatus || event.status || "").toLowerCase();
+                    if (status !== 'booked' && status !== 'confirmed' && status !== 'new') continue;
+
                     // 1. Text match
                     if (JSON.stringify(event).includes(cleanPhone)) {
                         addDebugLog(`🏆 Mega Scanner match (Cancel): ${event.id}`);
