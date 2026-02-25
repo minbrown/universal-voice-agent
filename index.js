@@ -43,8 +43,8 @@ const resolvePhone = (req) => {
     const { args, call } = req.body;
     let phone = args?.phone || args?.phoneNumber || args?.user_phone_number;
 
-    // If phone looks like a template tag, clear it to trigger fallback
-    if (phone && (phone.includes("{{") || phone.includes("undefined"))) {
+    // If phone looks like a template tag or is non-string, clear it to trigger fallback
+    if (phone && (typeof phone !== 'string' || phone.includes("{{") || phone.includes("undefined"))) {
         phone = null;
     }
 
@@ -742,15 +742,21 @@ app.post("/retell/get_contact_info", async (req, res) => {
             addDebugLog(`🏆 Found existing contact: ${contact.firstName} ${contact.lastName || ""}`);
             res.json({
                 found: true,
+                resolved_phone: phone, // Tell the agent we found their real number
                 contact_id: contact.id,
                 name: contact.firstName,
                 last_name: contact.lastName || "",
                 email: contact.email,
-                phone: contact.phone
+                phone: contact.phone,
+                message: `I found a profile for ${contact.firstName} ${contact.lastName || ""} associated with number ${phone}.`
             });
         } else {
-            addDebugLog("🤷 No contact found for greeting.");
-            res.json({ found: false });
+            addDebugLog(`🤷 No contact found for ${phone}.`);
+            res.json({
+                found: false,
+                resolved_phone: phone,
+                message: `I couldn't find a profile for the number ${phone}. You should ask the caller for their name.`
+            });
         }
     } catch (err) {
         addDebugLog(`❌ Lookup Failed: ${err.message}`);
@@ -773,7 +779,7 @@ app.post("/retell/update_contact_info", async (req, res) => {
         const contact = await findContactByPhoneOrEmail(phone, email);
 
         if (contact) {
-            addDebugLog(`🔄 Updating contact ${contact.id}...`);
+            addDebugLog(`🔄 Updating contact ${contact.id} (Name: ${first_name}, Last: ${last_name})...`);
             const updateRes = await fetch(`https://services.leadconnectorhq.com/contacts/${contact.id}`, {
                 method: "PUT",
                 headers: getGhlHeaders(),
@@ -785,11 +791,13 @@ app.post("/retell/update_contact_info", async (req, res) => {
                     locationId: process.env.GHL_LOCATION_ID
                 })
             });
+            const updateData = await updateRes.json();
             if (updateRes.ok) {
                 addDebugLog("✅ Contact updated successfully.");
-                res.json({ status: "success" });
+                res.json({ status: "success", message: "Contact updated in GHL." });
             } else {
-                throw new Error("GHL update failed");
+                addDebugLog(`❌ GHL Update Error: ${JSON.stringify(updateData)}`);
+                throw new Error(updateData.message || "GHL update failed");
             }
         } else {
             addDebugLog("🆕 Creating NEW contact for update...");
@@ -804,11 +812,13 @@ app.post("/retell/update_contact_info", async (req, res) => {
                     locationId: process.env.GHL_LOCATION_ID
                 })
             });
+            const createData = await createRes.json();
             if (createRes.ok) {
                 addDebugLog("✅ Contact created successfully.");
-                res.json({ status: "success" });
+                res.json({ status: "success", message: "New contact created in GHL." });
             } else {
-                throw new Error("GHL creation failed");
+                addDebugLog(`❌ GHL Creation Error: ${JSON.stringify(createData)}`);
+                throw new Error(createData.message || "GHL creation failed");
             }
         }
     } catch (err) {
