@@ -285,7 +285,13 @@ app.post("/retell/book_appointment", async (req, res) => {
             bookRes = await fetch(updateUrl, {
                 method: "PUT",
                 headers: getGhlHeaders("2021-04-15"),
-                body: JSON.stringify({ startTime, endTime, title: `Voice AI Update: ${firstName}` })
+                body: JSON.stringify({
+                    startTime,
+                    endTime,
+                    title: `Voice AI Update: ${firstName}`,
+                    assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
+                    ignoreFreeSlotValidation: true
+                })
             });
         } else {
             // Auto-detect if none specified
@@ -301,7 +307,13 @@ app.post("/retell/book_appointment", async (req, res) => {
                 bookRes = await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${existing.id}`, {
                     method: "PUT",
                     headers: getGhlHeaders("2021-04-15"),
-                    body: JSON.stringify({ startTime, endTime, title: `Voice AI Update: ${firstName}` })
+                    body: JSON.stringify({
+                        startTime,
+                        endTime,
+                        title: `Voice AI Update: ${firstName}`,
+                        assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
+                        ignoreFreeSlotValidation: true
+                    })
                 });
             } else {
                 console.log("🆕 Booking new appointment...");
