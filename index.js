@@ -221,8 +221,15 @@ app.post("/retell/check_availability", async (req, res) => {
                 const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
                 const aData = await aRes.json();
                 const nowMs = new Date().getTime();
+                const appts = aData?.appointments || [];
 
-                existingAppointments = (aData?.appointments || [])
+                addDebugLog(`Raw appts: ${appts.length}. Filter CalID: ${calendarId}`);
+                if (appts.length > 0) {
+                    const first = appts[0];
+                    addDebugLog(`Sample: ID ${first.id}, Stat ${first.status}, Cal ${first.calendarId}, Time ${first.startTime}`);
+                }
+
+                existingAppointments = appts
                     .filter(e => e.calendarId === calendarId &&
                         (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new') &&
                         new Date(e.startTime).getTime() > nowMs)
