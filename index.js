@@ -33,10 +33,27 @@ app.use((req, res, next) => {
 });
 
 const normalizePhone = (phone) => {
-    if (!phone) return null;
+    if (!phone || typeof phone !== 'string') return null;
     let digits = phone.replace(/\D/g, '');
     if (digits.length > 10) digits = digits.slice(-10);
     return digits;
+};
+
+const resolvePhone = (req) => {
+    const { args, call } = req.body;
+    let phone = args?.phone || args?.phoneNumber || args?.user_phone_number;
+
+    // If phone looks like a template tag, clear it to trigger fallback
+    if (phone && (phone.includes("{{") || phone.includes("undefined"))) {
+        phone = null;
+    }
+
+    // Fallback to Retell Metadata
+    if (!phone) {
+        phone = call?.from_number || call?.user_phone_number;
+    }
+
+    return phone;
 };
 
 app.use(express.static(join(__dirname, "public")));
@@ -217,7 +234,7 @@ app.post("/api/book", async (req, res) => {
 app.post("/retell/check_availability", async (req, res) => {
     console.log("\n🤖 AI SEARCHING SLOTS...");
     const { args } = req.body;
-    const phone = args?.phone;
+    const phone = resolvePhone(req);
     const email = args?.email;
 
     const calendarId = process.env.GHL_CALENDAR_ID;
@@ -366,10 +383,10 @@ app.post("/retell/check_availability", async (req, res) => {
 app.post("/retell/book_appointment", async (req, res) => {
     console.log("\n🤖 AI BOOKING ATTEMPT...");
     const { args } = req.body;
+    const phone = resolvePhone(req);
     const firstName = args.first_name || args.firstName || "Unknown";
     const lastName = args.last_name || args.lastName || "";
     const email = args.email;
-    const phone = args.phone;
     const slot = args.date_time || args.dateTime;
     const appointmentId = args.appointment_id; // Targeted reschedule
 
@@ -560,14 +577,12 @@ app.post("/retell/book_appointment", async (req, res) => {
 });
 
 app.post("/retell/cancel_appointment", async (req, res) => {
-    console.log("\n🤖 AI CANCEL ATTEMPT...");
+    console.log("\n🤖 AI CANCELLING...");
     const { args } = req.body;
-    const appointmentId = args.appointment_id;
-    const phone = args.phone;
+    const phone = resolvePhone(req);
+    let targetId = args.appointment_id;
 
     try {
-        let targetId = appointmentId;
-
         // If no ID passed, search for the most upcoming one by phone
         if (!targetId && phone) {
             const cleanPhone = normalizePhone(phone);
@@ -713,10 +728,12 @@ app.get("/debug/raw-calendar", async (req, res) => {
 
 app.post("/retell/get_contact_info", async (req, res) => {
     addDebugLog("🤖 AI LOOKUP CONTACT...");
-    const { args } = req.body;
-    const phone = args.phone;
+    const phone = resolvePhone(req);
 
-    if (!phone) return res.status(400).json({ error: "Missing phone" });
+    if (!phone) {
+        addDebugLog("❌ Could not resolve phone for lookup.");
+        return res.status(400).json({ error: "Missing phone" });
+    }
 
     try {
         const contact = await findContactByPhoneOrEmail(phone, null);
@@ -744,9 +761,13 @@ app.post("/retell/get_contact_info", async (req, res) => {
 app.post("/retell/update_contact_info", async (req, res) => {
     addDebugLog("🤖 AI UPDATE CONTACT...");
     const { args } = req.body;
-    const { phone, first_name, last_name, email } = args;
+    const phone = resolvePhone(req);
+    const { first_name, last_name, email } = args;
 
-    if (!phone) return res.status(400).json({ error: "Missing phone" });
+    if (!phone) {
+        addDebugLog("❌ Could not resolve phone for update.");
+        return res.status(400).json({ error: "Missing phone" });
+    }
 
     try {
         const contact = await findContactByPhoneOrEmail(phone, email);
