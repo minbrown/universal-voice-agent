@@ -231,9 +231,12 @@ app.post("/retell/check_availability", async (req, res) => {
                 const nowMs = new Date().getTime();
 
                 const matched = appts
-                    .filter(e => e.calendarId === calendarId &&
-                        (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new') &&
-                        new Date(e.startTime).getTime() > nowMs)
+                    .filter(e => {
+                        const status = (e.appointmentStatus || e.status || "").toLowerCase();
+                        return e.calendarId === calendarId &&
+                            (status === 'booked' || status === 'confirmed' || status === 'new') &&
+                            new Date(e.startTime).getTime() > nowMs;
+                    })
                     .map(e => ({
                         appointment_id: e.id,
                         time: e.startTime,
@@ -248,6 +251,36 @@ app.post("/retell/check_availability", async (req, res) => {
 
             // Deduplicate appointments by ID
             existingAppointments = Array.from(new Map(existingAppointments.map(a => [a.appointment_id, a])).values());
+
+            // Mega Fallback: Scan ALL calendar events for the phone number string if we still have nothing
+            if (existingAppointments.length === 0 && cleanPhone) {
+                try {
+                    addDebugLog(`🔦 Starting Mega Scanner for ${cleanPhone}...`);
+                    const megaUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${future.getTime()}`;
+                    const megaRes = await fetch(megaUrl, { headers: getGhlHeaders() });
+                    const megaData = await megaRes.json();
+                    const phoneSearchStr = cleanPhone.slice(-7); // Last 7 digits to be very loose
+
+                    const megaMatches = (megaData?.events || [])
+                        .filter(e => {
+                            const eventStr = JSON.stringify(e).replace(/\D/g, '');
+                            return eventStr.includes(phoneSearchStr) || (e.title || "").includes(cleanPhone);
+                        })
+                        .map(e => ({
+                            appointment_id: e.id,
+                            time: e.startTime,
+                            title: e.title || "Found by Phone Search"
+                        }));
+
+                    if (megaMatches.length > 0) {
+                        addDebugLog(`🏆 Mega Scanner SAVED THE DAY: Found ${megaMatches.length} appointments!`);
+                        existingAppointments.push(...megaMatches);
+                    }
+                } catch (megaErr) {
+                    addDebugLog(`⚠️ Mega Scanner failed: ${megaErr.message}`);
+                }
+            }
+
             addDebugLog(`Total distinct future appointments identified: ${existingAppointments.length}`);
         }
 
@@ -341,11 +374,12 @@ app.post("/retell/book_appointment", async (req, res) => {
             const nowMs = new Date().getTime();
             const calendarId = process.env.GHL_CALENDAR_ID;
 
-            const existing = (aData?.appointments || []).find(e =>
-                e.calendarId === calendarId &&
-                (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new') &&
-                new Date(e.startTime).getTime() > nowMs
-            );
+            const existing = (aData?.appointments || []).find(e => {
+                const status = (e.appointmentStatus || e.status || "").toLowerCase();
+                return e.calendarId === calendarId &&
+                    (status === 'booked' || status === 'confirmed' || status === 'new') &&
+                    new Date(e.startTime).getTime() > nowMs;
+            });
 
             if (existing) {
                 addDebugLog(`🔄 Auto-rescheduling found match: ${existing.id}`);
@@ -431,11 +465,12 @@ app.post("/retell/cancel_appointment", async (req, res) => {
                 const nowMs = new Date().getTime();
                 const calendarId = process.env.GHL_CALENDAR_ID;
 
-                const existing = appointments.find(e =>
-                    e.calendarId === calendarId &&
-                    (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new') &&
-                    new Date(e.startTime).getTime() > nowMs
-                );
+                const existing = appointments.find(e => {
+                    const status = (e.appointmentStatus || e.status || "").toLowerCase();
+                    return e.calendarId === calendarId &&
+                        (status === 'booked' || status === 'confirmed' || status === 'new') &&
+                        new Date(e.startTime).getTime() > nowMs;
+                });
 
                 if (existing) {
                     addDebugLog(`🏆 Found match to cancel on contact ${cId}! Appointment ID: ${existing.id}`);
