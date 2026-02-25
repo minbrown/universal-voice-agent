@@ -14,11 +14,24 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+const debugLogs = [];
+const addDebugLog = (msg) => {
+    const entry = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    console.log(entry);
+    debugLogs.unshift(entry);
+    if (debugLogs.length > 50) debugLogs.pop();
+};
+
 // Log all requests
 app.use((req, res, next) => {
-    console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
+    addDebugLog(`${req.method} ${req.url}`);
     next();
 });
+
+const normalizePhone = (phone) => {
+    if (!phone) return null;
+    return phone.replace(/\D/g, '').slice(-10); // Last 10 digits
+};
 
 app.use(express.static(join(__dirname, "public")));
 
@@ -175,6 +188,8 @@ app.post("/retell/check_availability", async (req, res) => {
     const now = new Date();
     const future = new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000)); // Search 30 days ahead
 
+    addDebugLog(`Availability requested for Phone: ${phone}, Email: ${email}`);
+
     try {
         // 1. Fetch free slots (7-day window for AI to suggest)
         const sevenDays = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
@@ -191,12 +206,14 @@ app.post("/retell/check_availability", async (req, res) => {
         let existingAppointments = [];
 
         if (phone || email) {
+            const searchVal = phone ? normalizePhone(phone) : email;
             const searchKey = phone ? "number" : "email";
-            const searchVal = phone || email;
             const searchUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&${searchKey}=${encodeURIComponent(searchVal)}`;
             const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
             const sData = await sRes.json();
             const contactId = sData?.contact?.id;
+
+            addDebugLog(`Contact lookup for ${searchKey} ${searchVal}: ${contactId || "NOT FOUND"}`);
 
             if (contactId) {
                 // Search up to 30 days for existing
@@ -371,42 +388,47 @@ app.post("/retell/cancel_appointment", async (req, res) => {
 
         // If no ID passed, search for the most upcoming one by phone
         if (!targetId && phone) {
-            console.log(`   Searching for appointment to cancel by phone: ${phone}`);
+            const cleanPhone = normalizePhone(phone);
+            addDebugLog(`Searching for appointment to cancel by phone: ${phone} (Normalized: ${cleanPhone})`);
             const start = new Date();
             const end = new Date();
             end.setDate(end.getDate() + 30);
 
-            const sRes = await fetch(`https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(phone)}`, { headers: getGhlHeaders() });
+            const searchUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
+            const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
             const sData = await sRes.json();
             const contactId = sData?.contact?.id;
-            console.log(`   Contact search result: ${contactId ? contactId : "NOT FOUND"}`);
+            addDebugLog(`Contact search result: ${contactId ? contactId : "NOT FOUND"}`);
 
             if (contactId) {
                 const aRes = await fetch(`https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${process.env.GHL_CALENDAR_ID}&startTime=${start.getTime()}&endTime=${end.getTime()}`, { headers: getGhlHeaders() });
                 const aData = await aRes.json();
                 const events = aData?.events || [];
-                console.log(`   Fetched ${events.length} events for the calendar.`);
+                addDebugLog(`Fetched ${events.length} events for the calendar.`);
 
                 const existing = events.find(e => e.contactId === contactId && (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new'));
                 if (existing) {
-                    console.log(`   Found match! Appointment ID: ${existing.id} (Status: ${existing.status})`);
+                    addDebugLog(`Found match! Appointment ID: ${existing.id} (Status: ${existing.status})`);
                     targetId = existing.id;
                 } else {
-                    console.log("   No matching active appointment found for this contactId in the fetched events.");
-                    const contactIdsInEvents = [...new Set(events.map(e => e.contactId))];
-                    console.log("   Contact IDs present in events:", contactIdsInEvents);
+                    addDebugLog(`No matching active appointment found for contactId: ${contactId}`);
                 }
             }
         }
 
         if (!targetId) {
+            addDebugLog("❌ Cancel Failed: No targetId resolved");
             return res.status(400).json({ error: "No appointment found to cancel" });
         }
 
-        console.log(`🗑️ Cancelling appointment: ${targetId}`);
+        addDebugLog(`🗑️ Cancelling appointment: ${targetId} via PUT status`);
         const delRes = await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${targetId}`, {
-            method: "DELETE",
-            headers: getGhlHeaders("2021-04-15")
+            method: "PUT",
+            headers: getGhlHeaders("2021-04-15"),
+            body: JSON.stringify({
+                calendarId: process.env.GHL_CALENDAR_ID,
+                appointmentStatus: "cancelled"
+            })
         });
 
         if (delRes.ok) {
@@ -420,6 +442,19 @@ app.post("/retell/cancel_appointment", async (req, res) => {
         console.error("❌ Cancel Error:", e.message);
         res.status(500).json({ error: e.message });
     }
+});
+
+app.get("/debug/logs", (req, res) => {
+    res.send(`
+        <html>
+            <body style="background: #1e1e1e; color: #00ff00; font-family: monospace; padding: 20px;">
+                <h1>🛠️ GHL AGENT DEBUG LOGS</h1>
+                <hr/>
+                <pre>${debugLogs.join('\n')}</pre>
+                <script>setTimeout(() => location.reload(), 5000);</script>
+            </body>
+        </html>
+    `);
 });
 
 app.listen(PORT, () => {
