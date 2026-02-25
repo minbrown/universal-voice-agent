@@ -255,26 +255,40 @@ app.post("/retell/check_availability", async (req, res) => {
             // Mega Fallback: Scan ALL calendar events for the phone number string if we still have nothing
             if (existingAppointments.length === 0 && cleanPhone) {
                 try {
-                    addDebugLog(`🔦 Starting Mega Scanner for ${cleanPhone}...`);
+                    addDebugLog(`🔦 Starting Mega Scanner (Absolute Scan) for ${cleanPhone}...`);
                     const megaUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${future.getTime()}`;
                     const megaRes = await fetch(megaUrl, { headers: getGhlHeaders() });
                     const megaData = await megaRes.json();
-                    const phoneSearchStr = cleanPhone.slice(-7); // Last 7 digits to be very loose
+                    const events = megaData?.events || [];
 
-                    const megaMatches = (megaData?.events || [])
-                        .filter(e => {
-                            const eventStr = JSON.stringify(e).replace(/\D/g, '');
-                            return eventStr.includes(phoneSearchStr) || (e.title || "").includes(cleanPhone);
-                        })
-                        .map(e => ({
-                            appointment_id: e.id,
-                            time: e.startTime,
-                            title: e.title || "Found by Phone Search"
-                        }));
+                    for (const event of events) {
+                        // 1. Check title/address directly
+                        const eventStr = JSON.stringify(event).toLowerCase();
+                        if (eventStr.includes(cleanPhone)) {
+                            addDebugLog(`🏆 Mega Scanner match by text: ${event.id}`);
+                            existingAppointments.push({
+                                appointment_id: event.id,
+                                time: event.startTime,
+                                title: event.title || "Found by Scan"
+                            });
+                            continue;
+                        }
 
-                    if (megaMatches.length > 0) {
-                        addDebugLog(`🏆 Mega Scanner SAVED THE DAY: Found ${megaMatches.length} appointments!`);
-                        existingAppointments.push(...megaMatches);
+                        // 2. Deep link: Check the contact record for this specific event
+                        if (event.contactId) {
+                            const cRes = await fetch(`https://services.leadconnectorhq.com/contacts/${event.contactId}`, { headers: getGhlHeaders() });
+                            const cData = await cRes.json();
+                            const cPhone = normalizePhone(cData?.contact?.phone);
+
+                            if (cPhone === cleanPhone) {
+                                addDebugLog(`🏆 Mega Scanner match by Deep Contact Link: ${event.id}`);
+                                existingAppointments.push({
+                                    appointment_id: event.id,
+                                    time: event.startTime,
+                                    title: event.title || "Found by Deep Scan"
+                                });
+                            }
+                        }
                     }
                 } catch (megaErr) {
                     addDebugLog(`⚠️ Mega Scanner failed: ${megaErr.message}`);
