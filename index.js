@@ -371,7 +371,7 @@ app.post("/retell/cancel_appointment", async (req, res) => {
 
         // If no ID passed, search for the most upcoming one by phone
         if (!targetId && phone) {
-            console.log("   Searching for appointment to cancel by phone...");
+            console.log(`   Searching for appointment to cancel by phone: ${phone}`);
             const start = new Date();
             const end = new Date();
             end.setDate(end.getDate() + 30);
@@ -379,12 +379,23 @@ app.post("/retell/cancel_appointment", async (req, res) => {
             const sRes = await fetch(`https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(phone)}`, { headers: getGhlHeaders() });
             const sData = await sRes.json();
             const contactId = sData?.contact?.id;
+            console.log(`   Contact search result: ${contactId ? contactId : "NOT FOUND"}`);
 
             if (contactId) {
                 const aRes = await fetch(`https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${process.env.GHL_CALENDAR_ID}&startTime=${start.getTime()}&endTime=${end.getTime()}`, { headers: getGhlHeaders() });
                 const aData = await aRes.json();
-                const existing = (aData?.events || []).find(e => e.contactId === contactId && (e.status === 'booked' || e.status === 'confirmed'));
-                targetId = existing?.id;
+                const events = aData?.events || [];
+                console.log(`   Fetched ${events.length} events for the calendar.`);
+
+                const existing = events.find(e => e.contactId === contactId && (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new'));
+                if (existing) {
+                    console.log(`   Found match! Appointment ID: ${existing.id} (Status: ${existing.status})`);
+                    targetId = existing.id;
+                } else {
+                    console.log("   No matching active appointment found for this contactId in the fetched events.");
+                    const contactIdsInEvents = [...new Set(events.map(e => e.contactId))];
+                    console.log("   Contact IDs present in events:", contactIdsInEvents);
+                }
             }
         }
 
