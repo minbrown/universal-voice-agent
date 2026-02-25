@@ -695,6 +695,7 @@ app.post("/retell/get_contact_info", async (req, res) => {
                 found: true,
                 contact_id: contact.id,
                 name: contact.firstName,
+                last_name: contact.lastName || "",
                 email: contact.email,
                 phone: contact.phone
             });
@@ -711,7 +712,7 @@ app.post("/retell/get_contact_info", async (req, res) => {
 app.post("/retell/update_contact_info", async (req, res) => {
     addDebugLog("🤖 AI UPDATE CONTACT...");
     const { args } = req.body;
-    const { phone, first_name, email } = args;
+    const { phone, first_name, last_name, email } = args;
 
     if (!phone) return res.status(400).json({ error: "Missing phone" });
 
@@ -729,6 +730,7 @@ app.post("/retell/update_contact_info", async (req, res) => {
                 headers: getGhlHeaders(),
                 body: JSON.stringify({
                     firstName: first_name || contact.firstName,
+                    lastName: last_name || contact.lastName,
                     email: email || contact.email,
                     phone: phone,
                     locationId: process.env.GHL_LOCATION_ID
@@ -747,6 +749,7 @@ app.post("/retell/update_contact_info", async (req, res) => {
                 headers: getGhlHeaders(),
                 body: JSON.stringify({
                     firstName: first_name || "New Contact",
+                    lastName: last_name || "",
                     email: email,
                     phone: phone,
                     locationId: process.env.GHL_LOCATION_ID
