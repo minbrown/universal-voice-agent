@@ -206,30 +206,31 @@ app.post("/retell/check_availability", async (req, res) => {
         let existingAppointments = [];
 
         if (phone || email) {
-            const searchVal = phone ? normalizePhone(phone) : email;
-            const searchKey = phone ? "number" : "email";
-            const searchUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&${searchKey}=${encodeURIComponent(searchVal)}`;
+            const cleanPhone = phone ? normalizePhone(phone) : null;
+            const searchVal = cleanPhone || email;
+            const searchKey = cleanPhone ? "query" : "email";
+
+            addDebugLog(`Deep search started for ${searchKey}: ${searchVal}`);
+
+            // Search ALL contacts matching the query (broader than 'duplicate' search)
+            const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&${searchKey}=${encodeURIComponent(searchVal)}`;
             const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
             const sData = await sRes.json();
-            const contactId = sData?.contact?.id;
+            const contacts = sData?.contacts || [];
 
-            addDebugLog(`Contact lookup for ${searchKey} ${searchVal}: ${contactId || "NOT FOUND"}`);
+            addDebugLog(`Deep search found ${contacts.length} potential contact records.`);
 
-            if (contactId) {
-                // Precision lookup for this specific contact
-                const apptUrl = `https://services.leadconnectorhq.com/contacts/${contactId}/appointments`;
+            for (const contact of contacts) {
+                const cId = contact.id;
+                addDebugLog(`Checking contact: ${contact.firstName || "Unnamed"} (${cId})`);
+
+                const apptUrl = `https://services.leadconnectorhq.com/contacts/${cId}/appointments`;
                 const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
                 const aData = await aRes.json();
-                const nowMs = new Date().getTime();
                 const appts = aData?.appointments || [];
+                const nowMs = new Date().getTime();
 
-                addDebugLog(`Raw appts: ${appts.length}. Filter CalID: ${calendarId}`);
-                if (appts.length > 0) {
-                    const first = appts[0];
-                    addDebugLog(`Sample: ID ${first.id}, Stat ${first.status}, Cal ${first.calendarId}, Time ${first.startTime}`);
-                }
-
-                existingAppointments = appts
+                const matched = appts
                     .filter(e => e.calendarId === calendarId &&
                         (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new') &&
                         new Date(e.startTime).getTime() > nowMs)
@@ -239,8 +240,15 @@ app.post("/retell/check_availability", async (req, res) => {
                         title: e.title || "Appointment"
                     }));
 
-                addDebugLog(`Precision lookup found ${existingAppointments.length} future appointments for contact: ${contactId}`);
+                if (matched.length > 0) {
+                    addDebugLog(`🏆 Found ${matched.length} appointments on contact ${cId}`);
+                    existingAppointments.push(...matched);
+                }
             }
+
+            // Deduplicate appointments by ID
+            existingAppointments = Array.from(new Map(existingAppointments.map(a => [a.appointment_id, a])).values());
+            addDebugLog(`Total distinct future appointments identified: ${existingAppointments.length}`);
         }
 
         console.log(`🤖 AI found ${availableSlots.length} options and ${existingAppointments.length} existing bookings.`);
@@ -406,24 +414,22 @@ app.post("/retell/cancel_appointment", async (req, res) => {
         if (!targetId && phone) {
             const cleanPhone = normalizePhone(phone);
             addDebugLog(`Searching for appointment to cancel by phone: ${phone} (Normalized: ${cleanPhone})`);
-            const start = new Date();
-            const end = new Date();
-            end.setDate(end.getDate() + 30);
 
-            const searchUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
+            const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
             const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
             const sData = await sRes.json();
-            const contactId = sData?.contact?.id;
-            addDebugLog(`Contact search result: ${contactId ? contactId : "NOT FOUND"}`);
+            const contacts = sData?.contacts || [];
 
-            if (contactId) {
-                const aRes = await fetch(`https://services.leadconnectorhq.com/contacts/${contactId}/appointments`, { headers: getGhlHeaders() });
+            addDebugLog(`Cancellation deep search found ${contacts.length} potential contact records.`);
+
+            for (const contact of contacts) {
+                const cId = contact.id;
+                const apptUrl = `https://services.leadconnectorhq.com/contacts/${cId}/appointments`;
+                const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
                 const aData = await aRes.json();
                 const appointments = aData?.appointments || [];
                 const nowMs = new Date().getTime();
                 const calendarId = process.env.GHL_CALENDAR_ID;
-
-                addDebugLog(`Cancellation precision lookup found ${appointments.length} appointments for contact.`);
 
                 const existing = appointments.find(e =>
                     e.calendarId === calendarId &&
@@ -432,11 +438,14 @@ app.post("/retell/cancel_appointment", async (req, res) => {
                 );
 
                 if (existing) {
-                    addDebugLog(`Found match to cancel! Appointment ID: ${existing.id} (Status: ${existing.status})`);
+                    addDebugLog(`🏆 Found match to cancel on contact ${cId}! Appointment ID: ${existing.id}`);
                     targetId = existing.id;
-                } else {
-                    addDebugLog(`No matching active FUTURE appointment found for contactId: ${contactId} in calendar: ${calendarId}`);
+                    break;
                 }
+            }
+
+            if (!targetId) {
+                addDebugLog(`No matching active FUTURE appointment found for ${cleanPhone} across ${contacts.length} records.`);
             }
         }
 
