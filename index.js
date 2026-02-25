@@ -382,21 +382,71 @@ app.post("/retell/book_appointment", async (req, res) => {
                 body: JSON.stringify(body)
             });
         } else {
-            // Auto-detect if none specified (Precision Lookup)
-            const aRes = await fetch(`https://services.leadconnectorhq.com/contacts/${contactId}/appointments`, { headers: getGhlHeaders() });
-            const aData = await aRes.json();
-            const nowMs = new Date().getTime();
-            const calendarId = process.env.GHL_CALENDAR_ID;
+            // Auto-detect if none specified (Deep Search across all potential records)
+            const cleanPhone = normalizePhone(phone);
+            const searchVal = cleanPhone || email;
+            const searchKey = cleanPhone ? "query" : "email";
 
-            const existing = (aData?.appointments || []).find(e => {
-                const status = (e.appointmentStatus || e.status || "").toLowerCase();
-                return e.calendarId === calendarId &&
-                    (status === 'booked' || status === 'confirmed' || status === 'new') &&
-                    new Date(e.startTime).getTime() > nowMs;
-            });
+            const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&${searchKey}=${encodeURIComponent(searchVal)}`;
+            const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
+            const sData = await sRes.json();
+            const contacts = sData?.contacts || [];
+            const calendarId = process.env.GHL_CALENDAR_ID;
+            const nowMs = new Date().getTime();
+
+            let existing = null;
+
+            // 1. Check all matching contacts
+            for (const contact of contacts) {
+                const cId = contact.id;
+                const aRes = await fetch(`https://services.leadconnectorhq.com/contacts/${cId}/appointments`, { headers: getGhlHeaders() });
+                const aData = await aRes.json();
+                const appointments = aData?.appointments || [];
+
+                existing = appointments.find(e => {
+                    const status = (e.appointmentStatus || e.status || "").toLowerCase();
+                    return e.calendarId === calendarId &&
+                        (status === 'booked' || status === 'confirmed' || status === 'new') &&
+                        new Date(e.startTime).getTime() > nowMs
+                });
+
+                if (existing) {
+                    addDebugLog(`🔄 Auto-rescheduling found match on contact ${cId}: ${existing.id}`);
+                    break;
+                }
+            }
+
+            // 2. Mega Scanner Fallback (Absolute Scan)
+            if (!existing && cleanPhone) {
+                try {
+                    addDebugLog(`🔦 Auto-reschedule starting Mega Scanner for ${cleanPhone}...`);
+                    const future = new Date(nowMs + (30 * 24 * 60 * 60 * 1000));
+                    const megaUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${nowMs}&endTime=${future.getTime()}`;
+                    const megaRes = await fetch(megaUrl, { headers: getGhlHeaders() });
+                    const megaData = await megaRes.json();
+                    const events = megaData?.events || [];
+
+                    for (const event of events) {
+                        if (JSON.stringify(event).includes(cleanPhone)) {
+                            existing = event;
+                            addDebugLog(`🏆 Mega Scanner SAVED Auto-Reschedule: ${existing.id}`);
+                            break;
+                        }
+                        if (event.contactId) {
+                            const cRes = await fetch(`https://services.leadconnectorhq.com/contacts/${event.contactId}`, { headers: getGhlHeaders() });
+                            const cData = await cRes.json();
+                            if (normalizePhone(cData?.contact?.phone) === cleanPhone) {
+                                existing = event;
+                                addDebugLog(`🏆 Mega Scanner Deep Match SAVED Auto-Reschedule: ${existing.id}`);
+                                break;
+                            }
+                        }
+                    }
+                } catch (e) { addDebugLog(`⚠️ Mega Scan Reschedule error: ${e.message}`); }
+            }
 
             if (existing) {
-                addDebugLog(`🔄 Auto-rescheduling found match: ${existing.id}`);
+                addDebugLog(`🔄 Executing Reschedule for: ${existing.id}`);
                 const body = {
                     startTime,
                     endTime,
@@ -406,7 +456,6 @@ app.post("/retell/book_appointment", async (req, res) => {
                     assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
                     ignoreFreeSlotValidation: true
                 };
-                console.log("📡 Auto-Reschedule Request Body:", JSON.stringify(body, null, 2));
                 bookRes = await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${existing.id}`, {
                     method: "PUT",
                     headers: getGhlHeaders("2021-04-15"),
@@ -494,7 +543,38 @@ app.post("/retell/cancel_appointment", async (req, res) => {
             }
 
             if (!targetId) {
-                addDebugLog(`No matching active FUTURE appointment found for ${cleanPhone} across ${contacts.length} records.`);
+                addDebugLog(`🔦 Starting Mega Scanner for Cancellation (${cleanPhone})...`);
+                const calendarId = process.env.GHL_CALENDAR_ID;
+                const nowMs = new Date().getTime();
+                const future = new Date(nowMs + (30 * 24 * 60 * 60 * 1000));
+
+                const megaUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${nowMs}&endTime=${future.getTime()}`;
+                const megaRes = await fetch(megaUrl, { headers: getGhlHeaders() });
+                const megaData = await megaRes.json();
+                const events = megaData?.events || [];
+
+                for (const event of events) {
+                    // 1. Text match
+                    if (JSON.stringify(event).includes(cleanPhone)) {
+                        addDebugLog(`🏆 Mega Scanner match (Cancel): ${event.id}`);
+                        targetId = event.id;
+                        break;
+                    }
+                    // 2. Deep contact match
+                    if (event.contactId) {
+                        const cRes = await fetch(`https://services.leadconnectorhq.com/contacts/${event.contactId}`, { headers: getGhlHeaders() });
+                        const cData = await cRes.json();
+                        if (normalizePhone(cData?.contact?.phone) === cleanPhone) {
+                            addDebugLog(`🏆 Mega Scanner Deep Match (Cancel): ${event.id}`);
+                            targetId = event.id;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!targetId) {
+                addDebugLog(`No matching active FUTURE appointment found for ${cleanPhone} across ${contacts.length} records + Mega Scan.`);
             }
         }
 
