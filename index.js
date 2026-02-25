@@ -24,7 +24,11 @@ const addDebugLog = (msg) => {
 
 // Log all requests
 app.use((req, res, next) => {
-    addDebugLog(`${req.method} ${req.url}`);
+    if (req.url.startsWith("/retell/")) {
+        addDebugLog(`${req.method} ${req.url} | Body: ${JSON.stringify(req.body)}`);
+    } else {
+        addDebugLog(`${req.method} ${req.url}`);
+    }
     next();
 });
 
@@ -212,101 +216,108 @@ app.post("/retell/check_availability", async (req, res) => {
         // 2. Identify all caller appointments
         let existingAppointments = [];
 
-        if (phone || email) {
-            const cleanPhone = phone ? normalizePhone(phone) : null;
-            const searchVal = cleanPhone || email;
+        const cleanPhone = phone ? normalizePhone(phone) : null;
+        const searchVal = cleanPhone || email;
+
+        addDebugLog(`Deep search started for ${searchVal}`);
+
+        let contacts = [];
+        if (cleanPhone) {
+            const dupUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
+            const dRes = await fetch(dupUrl, { headers: getGhlHeaders() });
+            const dData = await dRes.json();
+            if (dData?.contact) contacts.push(dData.contact);
+        }
+
+        if (contacts.length === 0 && searchVal) {
             const searchKey = cleanPhone ? "query" : "email";
-
-            addDebugLog(`Deep search started for ${searchKey}: ${searchVal}`);
-
-            // Search ALL contacts matching the query (broader than 'duplicate' search)
             const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&${searchKey}=${encodeURIComponent(searchVal)}`;
             const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
             const sData = await sRes.json();
-            const contacts = sData?.contacts || [];
+            contacts = sData?.contacts || [];
+        }
 
-            addDebugLog(`Deep search found ${contacts.length} potential contact records.`);
+        addDebugLog(`Deep search found ${contacts.length} potential contact records.`);
 
-            for (const contact of contacts) {
-                const cId = contact.id;
-                addDebugLog(`Checking contact: ${contact.firstName || "Unnamed"} (${cId})`);
+        for (const contact of contacts) {
+            const cId = contact.id;
+            addDebugLog(`Checking contact: ${contact.firstName || "Unnamed"} (${cId})`);
 
-                const apptUrl = `https://services.leadconnectorhq.com/contacts/${cId}/appointments`;
-                const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
-                const aData = await aRes.json();
-                const appts = aData?.appointments || [];
-                const nowMs = new Date().getTime();
+            const apptUrl = `https://services.leadconnectorhq.com/contacts/${cId}/appointments`;
+            const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
+            const aData = await aRes.json();
+            const appts = aData?.appointments || [];
+            const nowMs = new Date().getTime();
 
-                const matched = appts
-                    .filter(e => {
-                        const status = (e.appointmentStatus || e.status || "").toLowerCase();
-                        return e.calendarId === calendarId &&
-                            (status === 'booked' || status === 'confirmed' || status === 'new') &&
-                            new Date(e.startTime).getTime() > nowMs;
-                    })
-                    .map(e => ({
-                        appointment_id: e.id,
-                        time: e.startTime,
-                        title: e.title || "Appointment"
-                    }));
+            const matched = appts
+                .filter(e => {
+                    const status = (e.appointmentStatus || e.status || "").toLowerCase();
+                    return e.calendarId === calendarId &&
+                        (status === 'booked' || status === 'confirmed' || status === 'new') &&
+                        new Date(e.startTime).getTime() > nowMs;
+                })
+                .map(e => ({
+                    appointment_id: e.id,
+                    time: e.startTime,
+                    title: e.title || "Appointment"
+                }));
 
-                if (matched.length > 0) {
-                    addDebugLog(`🏆 Found ${matched.length} appointments on contact ${cId}`);
-                    existingAppointments.push(...matched);
-                }
+            if (matched.length > 0) {
+                addDebugLog(`🏆 Found ${matched.length} appointments on contact ${cId}`);
+                existingAppointments.push(...matched);
             }
+        }
 
-            // Deduplicate appointments by ID
-            existingAppointments = Array.from(new Map(existingAppointments.map(a => [a.appointment_id, a])).values());
+        // Deduplicate appointments by ID
+        existingAppointments = Array.from(new Map(existingAppointments.map(a => [a.appointment_id, a])).values());
 
-            // Mega Fallback: Scan ALL calendar events for the phone number string if we still have nothing
-            if (existingAppointments.length === 0 && cleanPhone) {
-                try {
-                    addDebugLog(`🔦 Starting Mega Scanner (Absolute Scan) for ${cleanPhone}...`);
-                    const megaUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${future.getTime()}`;
-                    const megaRes = await fetch(megaUrl, { headers: getGhlHeaders() });
-                    const megaData = await megaRes.json();
-                    const events = megaData?.events || [];
+        // Mega Fallback: Scan ALL calendar events for the phone number string if we still have nothing
+        if (existingAppointments.length === 0 && cleanPhone) {
+            try {
+                addDebugLog(`🔦 Starting Mega Scanner (Absolute Scan) for ${cleanPhone}...`);
+                const megaUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${future.getTime()}`;
+                const megaRes = await fetch(megaUrl, { headers: getGhlHeaders() });
+                const megaData = await megaRes.json();
+                const events = megaData?.events || [];
 
-                    for (const event of events) {
-                        const status = (event.appointmentStatus || event.status || "").toLowerCase();
-                        if (status !== 'booked' && status !== 'confirmed' && status !== 'new') continue;
+                for (const event of events) {
+                    const status = (event.appointmentStatus || event.status || "").toLowerCase();
+                    if (status !== 'booked' && status !== 'confirmed' && status !== 'new') continue;
 
-                        // 1. Check title/address directly
-                        const eventStr = JSON.stringify(event).toLowerCase();
-                        if (eventStr.includes(cleanPhone)) {
-                            addDebugLog(`🏆 Mega Scanner match by text: ${event.id}`);
+                    // 1. Check title/address directly
+                    const eventStr = JSON.stringify(event).toLowerCase();
+                    if (eventStr.includes(cleanPhone)) {
+                        addDebugLog(`🏆 Mega Scanner match by text: ${event.id}`);
+                        existingAppointments.push({
+                            appointment_id: event.id,
+                            time: event.startTime,
+                            title: event.title || "Found by Scan"
+                        });
+                        continue;
+                    }
+
+                    // 2. Deep link: Check the contact record for this specific event
+                    if (event.contactId) {
+                        const cRes = await fetch(`https://services.leadconnectorhq.com/contacts/${event.contactId}`, { headers: getGhlHeaders() });
+                        const cData = await cRes.json();
+                        const cPhone = normalizePhone(cData?.contact?.phone);
+
+                        if (cPhone === cleanPhone) {
+                            addDebugLog(`🏆 Mega Scanner match by Deep Contact Link: ${event.id}`);
                             existingAppointments.push({
                                 appointment_id: event.id,
                                 time: event.startTime,
-                                title: event.title || "Found by Scan"
+                                title: event.title || "Found by Deep Scan"
                             });
-                            continue;
-                        }
-
-                        // 2. Deep link: Check the contact record for this specific event
-                        if (event.contactId) {
-                            const cRes = await fetch(`https://services.leadconnectorhq.com/contacts/${event.contactId}`, { headers: getGhlHeaders() });
-                            const cData = await cRes.json();
-                            const cPhone = normalizePhone(cData?.contact?.phone);
-
-                            if (cPhone === cleanPhone) {
-                                addDebugLog(`🏆 Mega Scanner match by Deep Contact Link: ${event.id}`);
-                                existingAppointments.push({
-                                    appointment_id: event.id,
-                                    time: event.startTime,
-                                    title: event.title || "Found by Deep Scan"
-                                });
-                            }
                         }
                     }
-                } catch (megaErr) {
-                    addDebugLog(`⚠️ Mega Scanner failed: ${megaErr.message}`);
                 }
+            } catch (megaErr) {
+                addDebugLog(`⚠️ Mega Scanner failed: ${megaErr.message}`);
             }
-
-            addDebugLog(`Total distinct future appointments identified: ${existingAppointments.length}`);
         }
+
+        addDebugLog(`Total distinct future appointments identified: ${existingAppointments.length}`);
 
         console.log(`🤖 AI found ${availableSlots.length} options and ${existingAppointments.length} existing bookings.`);
 
@@ -687,10 +698,21 @@ app.post("/retell/get_contact_info", async (req, res) => {
 
     try {
         const cleanPhone = normalizePhone(phone);
-        const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
-        const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
-        const sData = await sRes.json();
-        const contact = sData?.contacts?.[0];
+        addDebugLog(`Lookup started for ${cleanPhone}`);
+
+        // Try duplicate search first (most robust)
+        const dupUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
+        const dRes = await fetch(dupUrl, { headers: getGhlHeaders() });
+        const dData = await dRes.json();
+        let contact = dData?.contact;
+
+        // Fallback to query search
+        if (!contact) {
+            const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
+            const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
+            const sData = await sRes.json();
+            contact = sData?.contacts?.[0];
+        }
 
         if (contact) {
             addDebugLog(`🏆 Found existing contact: ${contact.firstName} ${contact.lastName || ""}`);
@@ -721,10 +743,21 @@ app.post("/retell/update_contact_info", async (req, res) => {
 
     try {
         const cleanPhone = normalizePhone(phone);
-        const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
-        const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
-        const sData = await sRes.json();
-        let contact = sData?.contacts?.[0];
+        addDebugLog(`Update search started for ${cleanPhone}`);
+
+        // Try duplicate search first
+        const dupUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
+        const dRes = await fetch(dupUrl, { headers: getGhlHeaders() });
+        const dData = await dRes.json();
+        let contact = dData?.contact;
+
+        // Fallback to query search
+        if (!contact) {
+            const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
+            const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
+            const sData = await sRes.json();
+            contact = sData?.contacts?.[0];
+        }
 
         if (contact) {
             addDebugLog(`🔄 Updating contact ${contact.id}...`);
