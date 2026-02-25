@@ -324,6 +324,7 @@ app.post("/retell/book_appointment", async (req, res) => {
     console.log("\n🤖 AI BOOKING ATTEMPT...");
     const { args } = req.body;
     const firstName = args.first_name || args.firstName || "Unknown";
+    const lastName = args.last_name || args.lastName || "";
     const email = args.email;
     const phone = args.phone;
     const slot = args.date_time || args.dateTime;
@@ -355,16 +356,18 @@ app.post("/retell/book_appointment", async (req, res) => {
 
         // Upsert Contact
         if (contactId) {
+            addDebugLog(`🔄 Updating contact ${contactId} with last name ${lastName}...`);
             await fetch(`https://services.leadconnectorhq.com/contacts/${contactId}`, {
                 method: "PUT",
                 headers: getGhlHeaders(),
-                body: JSON.stringify({ firstName, email, phone, locationId: process.env.GHL_LOCATION_ID })
+                body: JSON.stringify({ firstName, lastName, email, phone, locationId: process.env.GHL_LOCATION_ID })
             });
         } else {
+            addDebugLog(`🆕 Creating contact with last name ${lastName}...`);
             const cRes = await fetch("https://services.leadconnectorhq.com/contacts/", {
                 method: "POST",
                 headers: getGhlHeaders(),
-                body: JSON.stringify({ firstName, email, phone, locationId: process.env.GHL_LOCATION_ID })
+                body: JSON.stringify({ firstName, lastName, email, phone, locationId: process.env.GHL_LOCATION_ID })
             });
             const cData = await cRes.json();
             contactId = cData?.contact?.id;
@@ -495,7 +498,7 @@ app.post("/retell/book_appointment", async (req, res) => {
                     contactId,
                     startTime,
                     endTime,
-                    title: `Voice AI Booking: ${firstName}`,
+                    title: `Voice AI Booking: ${firstName} ${lastName}`,
                     appointmentStatus: "confirmed",
                     assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
                     ignoreFreeSlotValidation: true
