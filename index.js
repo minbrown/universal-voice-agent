@@ -675,6 +675,96 @@ app.get("/debug/raw-calendar", async (req, res) => {
     }
 });
 
+app.post("/retell/get_contact_info", async (req, res) => {
+    addDebugLog("🤖 AI LOOKUP CONTACT...");
+    const { args } = req.body;
+    const phone = args.phone;
+
+    if (!phone) return res.status(400).json({ error: "Missing phone" });
+
+    try {
+        const cleanPhone = normalizePhone(phone);
+        const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
+        const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
+        const sData = await sRes.json();
+        const contact = sData?.contacts?.[0];
+
+        if (contact) {
+            addDebugLog(`🏆 Found existing contact: ${contact.firstName} ${contact.lastName || ""}`);
+            res.json({
+                found: true,
+                contact_id: contact.id,
+                name: contact.firstName,
+                email: contact.email,
+                phone: contact.phone
+            });
+        } else {
+            addDebugLog("🤷 No contact found for greeting.");
+            res.json({ found: false });
+        }
+    } catch (err) {
+        addDebugLog(`❌ Lookup Failed: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post("/retell/update_contact_info", async (req, res) => {
+    addDebugLog("🤖 AI UPDATE CONTACT...");
+    const { args } = req.body;
+    const { phone, first_name, email } = args;
+
+    if (!phone) return res.status(400).json({ error: "Missing phone" });
+
+    try {
+        const cleanPhone = normalizePhone(phone);
+        const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
+        const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
+        const sData = await sRes.json();
+        let contact = sData?.contacts?.[0];
+
+        if (contact) {
+            addDebugLog(`🔄 Updating contact ${contact.id}...`);
+            const updateRes = await fetch(`https://services.leadconnectorhq.com/contacts/${contact.id}`, {
+                method: "PUT",
+                headers: getGhlHeaders(),
+                body: JSON.stringify({
+                    firstName: first_name || contact.firstName,
+                    email: email || contact.email,
+                    phone: phone,
+                    locationId: process.env.GHL_LOCATION_ID
+                })
+            });
+            if (updateRes.ok) {
+                addDebugLog("✅ Contact updated successfully.");
+                res.json({ status: "success" });
+            } else {
+                throw new Error("GHL update failed");
+            }
+        } else {
+            addDebugLog("🆕 Creating NEW contact for update...");
+            const createRes = await fetch("https://services.leadconnectorhq.com/contacts/", {
+                method: "POST",
+                headers: getGhlHeaders(),
+                body: JSON.stringify({
+                    firstName: first_name || "New Contact",
+                    email: email,
+                    phone: phone,
+                    locationId: process.env.GHL_LOCATION_ID
+                })
+            });
+            if (createRes.ok) {
+                addDebugLog("✅ Contact created successfully.");
+                res.json({ status: "success" });
+            } else {
+                throw new Error("GHL creation failed");
+            }
+        }
+    } catch (err) {
+        addDebugLog(`❌ Update Failed: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`\n🚀 GHL Scheduler Debug App running at http://localhost:${PORT}`);
     console.log(`📁 Serving files from: ${join(__dirname, "public")}`);
