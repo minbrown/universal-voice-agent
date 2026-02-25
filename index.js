@@ -34,7 +34,9 @@ app.use((req, res, next) => {
 
 const normalizePhone = (phone) => {
     if (!phone) return null;
-    return phone.replace(/\D/g, '').slice(-10); // Last 10 digits
+    let digits = phone.replace(/\D/g, '');
+    if (digits.length > 10) digits = digits.slice(-10);
+    return digits;
 };
 
 app.use(express.static(join(__dirname, "public")));
@@ -43,7 +45,37 @@ app.get("/", (req, res) => {
     res.sendFile(join(__dirname, "public", "index.html"));
 });
 
-// Headers for GHL
+const findContactByPhoneOrEmail = async (phone, email) => {
+    const cleanPhone = normalizePhone(phone);
+    const strategies = [];
+
+    if (phone) strategies.push({ type: "duplicate", val: phone }); // E.164
+    if (cleanPhone && cleanPhone !== phone) strategies.push({ type: "duplicate", val: cleanPhone });
+    if (email) strategies.push({ type: "email", val: email });
+    if (cleanPhone) strategies.push({ type: "query", val: cleanPhone });
+
+    for (const s of strategies) {
+        addDebugLog(`🔍 Searching (${s.type}): ${s.val}`);
+        let url = "";
+        if (s.type === "duplicate") url = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(s.val)}`;
+        else if (s.type === "email") url = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(s.val)}`;
+        else url = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(s.val)}`;
+
+        try {
+            const res = await fetch(url, { headers: getGhlHeaders() });
+            const data = await res.json();
+            const contact = data?.contact || data?.contacts?.[0];
+            if (contact) {
+                addDebugLog(`🏆 Hit! Found contact: ${contact.id}`);
+                return contact;
+            }
+        } catch (e) {
+            addDebugLog(`⚠️ Search strategy ${s.type} failed: ${e.message}`);
+        }
+    }
+    return null;
+};
+
 const getGhlHeaders = (version = "2021-07-28") => ({
     Authorization: `Bearer ${process.env.GHL_API_KEY}`,
     Version: version,
@@ -351,19 +383,9 @@ app.post("/retell/book_appointment", async (req, res) => {
     try {
         let contactId = null;
 
-        // Search by Phone
-        if (phone) {
-            const pRes = await fetch(`https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(phone)}`, { headers: getGhlHeaders() });
-            const pData = await pRes.json();
-            contactId = pData?.contact?.id;
-        }
-
-        // Fallback Email
-        if (!contactId && email) {
-            const eRes = await fetch(`https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`, { headers: getGhlHeaders() });
-            const eData = await eRes.json();
-            contactId = eData?.contact?.id;
-        }
+        // Search for existing contact robustly
+        const existing = await findContactByPhoneOrEmail(phone, email);
+        if (existing) contactId = existing.id;
 
         // Upsert Contact
         if (contactId) {
@@ -697,22 +719,7 @@ app.post("/retell/get_contact_info", async (req, res) => {
     if (!phone) return res.status(400).json({ error: "Missing phone" });
 
     try {
-        const cleanPhone = normalizePhone(phone);
-        addDebugLog(`Lookup started for ${cleanPhone}`);
-
-        // Try duplicate search first (most robust)
-        const dupUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
-        const dRes = await fetch(dupUrl, { headers: getGhlHeaders() });
-        const dData = await dRes.json();
-        let contact = dData?.contact;
-
-        // Fallback to query search
-        if (!contact) {
-            const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
-            const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
-            const sData = await sRes.json();
-            contact = sData?.contacts?.[0];
-        }
+        const contact = await findContactByPhoneOrEmail(phone, null);
 
         if (contact) {
             addDebugLog(`🏆 Found existing contact: ${contact.firstName} ${contact.lastName || ""}`);
@@ -742,22 +749,7 @@ app.post("/retell/update_contact_info", async (req, res) => {
     if (!phone) return res.status(400).json({ error: "Missing phone" });
 
     try {
-        const cleanPhone = normalizePhone(phone);
-        addDebugLog(`Update search started for ${cleanPhone}`);
-
-        // Try duplicate search first
-        const dupUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
-        const dRes = await fetch(dupUrl, { headers: getGhlHeaders() });
-        const dData = await dRes.json();
-        let contact = dData?.contact;
-
-        // Fallback to query search
-        if (!contact) {
-            const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
-            const sRes = await fetch(searchUrl, { headers: getGhlHeaders() });
-            const sData = await sRes.json();
-            contact = sData?.contacts?.[0];
-        }
+        const contact = await findContactByPhoneOrEmail(phone, email);
 
         if (contact) {
             addDebugLog(`🔄 Updating contact ${contact.id}...`);
