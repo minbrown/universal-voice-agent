@@ -193,13 +193,20 @@ app.post("/retell/check_availability", async (req, res) => {
     try {
         // 1. Fetch free slots (7-day window for AI to suggest)
         const sevenDays = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
+        // Force timezone to matching calendar's offset or UTC to be safe, but GHL usually returns local.
+        // We add strict filtering after fetch.
         const slotsUrl = `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots?startDate=${now.getTime()}&endDate=${sevenDays.getTime()}`;
         const slotsRes = await fetch(slotsUrl, { headers: getGhlHeaders() });
         const slotsData = await slotsRes.json();
 
         let availableSlots = [];
+        const bufferTime = now.getTime() + (60 * 60 * 1000); // 1 hour buffer from now
+
         Object.keys(slotsData).forEach(day => {
-            if (slotsData[day]?.slots) availableSlots.push(...slotsData[day].slots);
+            if (slotsData[day]?.slots) {
+                const futureSlots = slotsData[day].slots.filter(s => new Date(s).getTime() > bufferTime);
+                availableSlots.push(...futureSlots);
+            }
         });
 
         // 2. Identify all caller appointments
