@@ -478,16 +478,44 @@ app.post("/retell/cancel_appointment", async (req, res) => {
 });
 
 app.get("/debug/logs", (req, res) => {
+    const logsHtml = debugLogs.map(log => `<div>${log}</div>`).join("");
     res.send(`
         <html>
-            <body style="background: #1e1e1e; color: #00ff00; font-family: monospace; padding: 20px;">
-                <h1>🛠️ GHL AGENT DEBUG LOGS</h1>
-                <hr/>
-                <pre>${debugLogs.join('\n')}</pre>
+            <head>
+                <style>
+                    body { font-family: monospace; background: #121212; color: #00ff00; padding: 20px; }
+                    div { border-bottom: 1px solid #333; padding: 5px 0; }
+                    .header { color: #fff; font-size: 20px; margin-bottom: 20px; border-bottom: 2px solid #00ff00; }
+                </style>
+            </head>
+            <body>
+                <div class="header">🛠️ GHL AGENT DEBUG LOGS</div>
+                <div style="margin-bottom: 20px; color: #aaa;">
+                    Endpoints: <a href="/debug/logs" style="color: #00ff00;">/logs</a> | 
+                    <a href="/debug/raw-calendar" style="color: #00ff00;">/raw-calendar</a>
+                </div>
+                ${logsHtml}
                 <script>setTimeout(() => location.reload(), 5000);</script>
             </body>
         </html>
     `);
+});
+
+app.get("/debug/raw-calendar", async (req, res) => {
+    try {
+        const calendarId = process.env.GHL_CALENDAR_ID;
+        const now = new Date();
+        const future = new Date(now.getTime() + (30 * 24 * 60 * 60 * 1000));
+        const url = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${future.getTime()}`;
+        const response = await fetch(url, { headers: getGhlHeaders() });
+        const data = await response.json();
+        res.json({
+            config: { calendarId, locationId: process.env.GHL_LOCATION_ID },
+            data
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 app.listen(PORT, () => {
