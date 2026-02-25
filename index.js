@@ -200,12 +200,12 @@ app.post("/retell/check_availability", async (req, res) => {
 
             if (contactId) {
                 // Search up to 30 days for existing
-                const apptUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${future.getTime()}`;
+                const apptUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.toISOString()}&endTime=${future.toISOString()}`;
                 const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
                 const aData = await aRes.json();
 
                 existingAppointments = (aData?.events || [])
-                    .filter(e => e.contactId === contactId && (e.status === 'booked' || e.status === 'confirmed'))
+                    .filter(e => e.contactId === contactId && (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new'))
                     .map(e => ({
                         appointment_id: e.id,
                         time: e.startTime,
@@ -302,9 +302,9 @@ app.post("/retell/book_appointment", async (req, res) => {
             const startSearch = new Date();
             const endSearch = new Date();
             endSearch.setDate(endSearch.getDate() + 30);
-            const aRes = await fetch(`https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${process.env.GHL_CALENDAR_ID}&startTime=${startSearch.getTime()}&endTime=${endSearch.getTime()}`, { headers: getGhlHeaders() });
+            const aRes = await fetch(`https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${process.env.GHL_CALENDAR_ID}&startTime=${startSearch.toISOString()}&endTime=${endSearch.toISOString()}`, { headers: getGhlHeaders() });
             const aData = await aRes.json();
-            const existing = (aData?.events || []).find(e => e.contactId === contactId && (e.status === 'booked' || e.status === 'confirmed'));
+            const existing = (aData?.events || []).find(e => e.contactId === contactId && (e.status === 'booked' || e.status === 'confirmed' || e.status === 'new'));
 
             if (existing) {
                 console.log(`🔄 Auto-rescheduling: ${existing.id}`);
@@ -382,7 +382,7 @@ app.post("/retell/cancel_appointment", async (req, res) => {
             console.log(`   Contact search result: ${contactId ? contactId : "NOT FOUND"}`);
 
             if (contactId) {
-                const aRes = await fetch(`https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${process.env.GHL_CALENDAR_ID}&startTime=${start.getTime()}&endTime=${end.getTime()}`, { headers: getGhlHeaders() });
+                const aRes = await fetch(`https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${process.env.GHL_CALENDAR_ID}&startTime=${start.toISOString()}&endTime=${end.toISOString()}`, { headers: getGhlHeaders() });
                 const aData = await aRes.json();
                 const events = aData?.events || [];
                 console.log(`   Fetched ${events.length} events for the calendar.`);
