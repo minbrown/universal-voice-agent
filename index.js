@@ -322,7 +322,10 @@ app.post("/retell/book_appointment", async (req, res) => {
     const slot = args.date_time || args.dateTime;
     const appointmentId = args.appointment_id; // Targeted reschedule
 
+    addDebugLog(`Booking/Reschedule requested for ${firstName} at ${slot} (ID: ${appointmentId})`);
+
     if (!slot) {
+        addDebugLog("❌ Missing slot/date_time");
         return res.status(400).json({ error: "Missing slot/date_time" });
     }
 
@@ -360,7 +363,11 @@ app.post("/retell/book_appointment", async (req, res) => {
             contactId = cData?.contact?.id;
         }
 
-        if (!contactId) throw new Error("Failed to resolve contact ID");
+        if (!contactId) {
+            addDebugLog("❌ Failed to resolve contact ID for booking");
+            throw new Error("Failed to resolve contact ID");
+        }
+        addDebugLog(`Contact resolved: ${contactId}`);
 
         const startTime = new Date(slot).toISOString();
         const endTime = new Date(new Date(slot).getTime() + 30 * 60000).toISOString();
@@ -374,6 +381,7 @@ app.post("/retell/book_appointment", async (req, res) => {
                 endTime,
                 title: `Voice AI Update: ${firstName}`,
                 calendarId: process.env.GHL_CALENDAR_ID,
+                locationId: process.env.GHL_LOCATION_ID,
                 appointmentStatus: "confirmed",
                 assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
                 ignoreFreeSlotValidation: true
@@ -410,13 +418,17 @@ app.post("/retell/book_appointment", async (req, res) => {
                     const status = (e.appointmentStatus || e.status || "").toLowerCase();
                     return e.calendarId === calendarId &&
                         (status === 'booked' || status === 'confirmed' || status === 'new') &&
-                        new Date(e.startTime).getTime() > nowMs
+                        new Date(e.startTime).getTime() > nowMs;
                 });
 
                 if (existing) {
-                    addDebugLog(`🔄 Auto-rescheduling found match on contact ${cId}: ${existing.id}`);
+                    addDebugLog(`🏆 Auto-reschedule found match on contact ${cId}: ${existing.id}`);
                     break;
                 }
+            }
+
+            if (!existing) {
+                addDebugLog("🤷 No appointment found via contact search for reschedule.");
             }
 
             // 2. Mega Scanner Fallback (Absolute Scan)
@@ -458,6 +470,7 @@ app.post("/retell/book_appointment", async (req, res) => {
                     endTime,
                     title: `Voice AI Update: ${firstName}`,
                     calendarId: process.env.GHL_CALENDAR_ID,
+                    locationId: process.env.GHL_LOCATION_ID,
                     appointmentStatus: "confirmed",
                     assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
                     ignoreFreeSlotValidation: true
@@ -491,15 +504,14 @@ app.post("/retell/book_appointment", async (req, res) => {
 
         const bData = await bookRes.json();
         if (bookRes.ok) {
-            console.log("🤖 AI BOOKING SUCCESS!");
+            addDebugLog(`✅ GHL Success: ${appointmentId || existing?.id || "NEW"}`);
             res.json({ status: "success", message: "Processed successfully!" });
         } else {
-            console.error("🤖 GHL REJECTED AI. Status:", bookRes.status);
-            console.error("🤖 GHL Error Details:", JSON.stringify(bData, null, 2));
+            addDebugLog(`❌ GHL Rejected (${bookRes.status}): ${JSON.stringify(bData)}`);
             res.status(400).json({ error: bData.message || "Booking failed" });
         }
     } catch (e) {
-        console.error("❌ Fatal Error:", e.message);
+        addDebugLog(`❌ Fatal Booking Error: ${e.message}`);
         res.status(500).json({ error: e.message });
     }
 });
