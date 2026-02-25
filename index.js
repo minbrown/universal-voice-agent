@@ -282,16 +282,20 @@ app.post("/retell/book_appointment", async (req, res) => {
         if (appointmentId) {
             console.log(`🔄 Targeted reschedule for ID: ${appointmentId}`);
             const updateUrl = `https://services.leadconnectorhq.com/calendars/events/appointments/${appointmentId}`;
+            const body = {
+                startTime,
+                endTime,
+                title: `Voice AI Update: ${firstName}`,
+                calendarId: process.env.GHL_CALENDAR_ID,
+                appointmentStatus: "confirmed",
+                assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
+                ignoreFreeSlotValidation: true
+            };
+            console.log("📡 Reschedule Request Body:", JSON.stringify(body, null, 2));
             bookRes = await fetch(updateUrl, {
                 method: "PUT",
                 headers: getGhlHeaders("2021-04-15"),
-                body: JSON.stringify({
-                    startTime,
-                    endTime,
-                    title: `Voice AI Update: ${firstName}`,
-                    assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
-                    ignoreFreeSlotValidation: true
-                })
+                body: JSON.stringify(body)
             });
         } else {
             // Auto-detect if none specified
@@ -304,32 +308,39 @@ app.post("/retell/book_appointment", async (req, res) => {
 
             if (existing) {
                 console.log(`🔄 Auto-rescheduling: ${existing.id}`);
+                const body = {
+                    startTime,
+                    endTime,
+                    title: `Voice AI Update: ${firstName}`,
+                    calendarId: process.env.GHL_CALENDAR_ID,
+                    appointmentStatus: "confirmed",
+                    assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
+                    ignoreFreeSlotValidation: true
+                };
+                console.log("📡 Auto-Reschedule Request Body:", JSON.stringify(body, null, 2));
                 bookRes = await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${existing.id}`, {
                     method: "PUT",
                     headers: getGhlHeaders("2021-04-15"),
-                    body: JSON.stringify({
-                        startTime,
-                        endTime,
-                        title: `Voice AI Update: ${firstName}`,
-                        assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
-                        ignoreFreeSlotValidation: true
-                    })
+                    body: JSON.stringify(body)
                 });
             } else {
                 console.log("🆕 Booking new appointment...");
+                const body = {
+                    calendarId: process.env.GHL_CALENDAR_ID,
+                    locationId: process.env.GHL_LOCATION_ID,
+                    contactId,
+                    startTime,
+                    endTime,
+                    title: `Voice AI Booking: ${firstName}`,
+                    appointmentStatus: "confirmed",
+                    assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
+                    ignoreFreeSlotValidation: true
+                };
+                console.log("📡 New Booking Request Body:", JSON.stringify(body, null, 2));
                 bookRes = await fetch("https://services.leadconnectorhq.com/calendars/events/appointments", {
                     method: "POST",
                     headers: getGhlHeaders("2021-04-15"),
-                    body: JSON.stringify({
-                        calendarId: process.env.GHL_CALENDAR_ID,
-                        locationId: process.env.GHL_LOCATION_ID,
-                        contactId,
-                        startTime,
-                        endTime,
-                        title: `Voice AI Booking: ${firstName}`,
-                        appointmentStatus: "confirmed",
-                        ignoreFreeSlotValidation: true
-                    })
+                    body: JSON.stringify(body)
                 });
             }
         }
@@ -339,7 +350,8 @@ app.post("/retell/book_appointment", async (req, res) => {
             console.log("🤖 AI BOOKING SUCCESS!");
             res.json({ status: "success", message: "Processed successfully!" });
         } else {
-            console.error("🤖 GHL REJECTED AI:", bData);
+            console.error("🤖 GHL REJECTED AI. Status:", bookRes.status);
+            console.error("🤖 GHL Error Details:", JSON.stringify(bData, null, 2));
             res.status(400).json({ error: bData.message || "Booking failed" });
         }
     } catch (e) {
