@@ -559,79 +559,59 @@ app.post("/retell/book_appointment", async (req, res) => {
         const endTime = new Date(new Date(slot).getTime() + 30 * 60000).toISOString();
 
         let bookRes;
-        if (appointmentId) {
-            console.log(`🔄 Targeted reschedule for ID: ${appointmentId}`);
-            const updateUrl = `https://services.leadconnectorhq.com/calendars/events/appointments/${appointmentId}`;
-            const body = {
-                startTime,
-                endTime,
-                title: `Voice AI Update: ${firstName}`,
-                calendarId: process.env.GHL_CALENDAR_ID,
-                locationId: process.env.GHL_LOCATION_ID,
-                appointmentStatus: "confirmed",
-                assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
-                ignoreFreeSlotValidation: true
-            };
-            console.log("📡 Reschedule Request Body:", JSON.stringify(body, null, 2));
-            bookRes = await fetch(updateUrl, {
-                method: "PUT",
-                headers: getGhlHeaders("2021-04-15"),
-                body: JSON.stringify(body)
-            });
-        } else {
-            // Auto-cancel existing future appointments for this contact before creating new
-            if (contactId) {
-                try {
-                    const apptUrl = `https://services.leadconnectorhq.com/contacts/${contactId}/appointments`;
-                    const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
-                    const aData = await aRes.json();
-                    const futureAppts = (aData?.appointments || []).filter(e => {
-                        const status = (e.appointmentStatus || e.status || "").toLowerCase();
-                        return e.calendarId === process.env.GHL_CALENDAR_ID &&
-                            (status === 'booked' || status === 'confirmed' || status === 'new') &&
-                            new Date(e.startTime).getTime() > Date.now();
+
+        // Always cancel existing future appointments for this contact before creating new
+        if (contactId) {
+            try {
+                const apptUrl = `https://services.leadconnectorhq.com/contacts/${contactId}/appointments`;
+                const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
+                const aData = await aRes.json();
+                const futureAppts = (aData?.appointments || []).filter(e => {
+                    const status = (e.appointmentStatus || e.status || "").toLowerCase();
+                    return e.calendarId === process.env.GHL_CALENDAR_ID &&
+                        (status === 'booked' || status === 'confirmed' || status === 'new') &&
+                        new Date(e.startTime).getTime() > Date.now();
+                });
+
+                for (const old of futureAppts) {
+                    addDebugLog(`🗑️ Cancelling old appointment: ${old.id} at ${old.startTime}`);
+                    await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${old.id}`, {
+                        method: "PUT",
+                        headers: getGhlHeaders("2021-04-15"),
+                        body: JSON.stringify({
+                            calendarId: process.env.GHL_CALENDAR_ID,
+                            locationId: process.env.GHL_LOCATION_ID,
+                            appointmentStatus: "cancelled"
+                        })
                     });
-
-                    for (const old of futureAppts) {
-                        addDebugLog(`🗑️ Auto-cancelling old appointment: ${old.id} at ${old.startTime}`);
-                        await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${old.id}`, {
-                            method: "PUT",
-                            headers: getGhlHeaders("2021-04-15"),
-                            body: JSON.stringify({
-                                calendarId: process.env.GHL_CALENDAR_ID,
-                                locationId: process.env.GHL_LOCATION_ID,
-                                appointmentStatus: "cancelled"
-                            })
-                        });
-                    }
-                    if (futureAppts.length > 0) {
-                        addDebugLog(`✅ Cancelled ${futureAppts.length} old appointment(s)`);
-                    }
-                } catch (cancelErr) {
-                    addDebugLog(`⚠️ Auto-cancel failed: ${cancelErr.message}`);
                 }
+                if (futureAppts.length > 0) {
+                    addDebugLog(`✅ Cancelled ${futureAppts.length} old appointment(s)`);
+                }
+            } catch (cancelErr) {
+                addDebugLog(`⚠️ Auto-cancel failed: ${cancelErr.message}`);
             }
-
-            // Create the new booking
-            console.log("🆕 Booking new appointment...");
-            const newBody = {
-                calendarId: process.env.GHL_CALENDAR_ID,
-                locationId: process.env.GHL_LOCATION_ID,
-                contactId,
-                startTime,
-                endTime,
-                title: `Voice AI Booking: ${firstName} ${lastName}`,
-                appointmentStatus: "confirmed",
-                assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
-                ignoreFreeSlotValidation: true
-            };
-            addDebugLog(`📡 New Booking: ${JSON.stringify(newBody)}`);
-            bookRes = await fetch("https://services.leadconnectorhq.com/calendars/events/appointments", {
-                method: "POST",
-                headers: getGhlHeaders("2021-04-15"),
-                body: JSON.stringify(newBody)
-            });
         }
+
+        // Always create a fresh booking
+        console.log("🆕 Booking new appointment...");
+        const newBody = {
+            calendarId: process.env.GHL_CALENDAR_ID,
+            locationId: process.env.GHL_LOCATION_ID,
+            contactId,
+            startTime,
+            endTime,
+            title: `Voice AI Booking: ${firstName} ${lastName}`,
+            appointmentStatus: "confirmed",
+            assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
+            ignoreFreeSlotValidation: true
+        };
+        addDebugLog(`📡 New Booking: ${JSON.stringify(newBody)}`);
+        bookRes = await fetch("https://services.leadconnectorhq.com/calendars/events/appointments", {
+            method: "POST",
+            headers: getGhlHeaders("2021-04-15"),
+            body: JSON.stringify(newBody)
+        });
 
         const bData = await bookRes.json();
         if (bookRes.ok) {
