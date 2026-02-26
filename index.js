@@ -94,6 +94,128 @@ app.get("/", (req, res) => {
     res.sendFile(join(__dirname, "public", "index.html"));
 });
 
+/**
+ * FIRECRAWL UTILITY: Scrape business context for demos
+ */
+const scrapeBusinessContext = async (url) => {
+    if (!url) return "General business information";
+    addDebugLog(`🔥 Scraping website: ${url}`);
+    try {
+        const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                url,
+                formats: ["json"],
+                jsonOptions: {
+                    schema: {
+                        type: "object",
+                        properties: {
+                            business_summary: { type: "string" },
+                            services: { type: "array", items: { type: "string" } },
+                            pricing: { type: "string" },
+                            business_hours: { type: "string" },
+                            location_details: { type: "string" },
+                            faqs: { type: "array", items: { type: "object", properties: { q: { type: "string" }, a: { type: "string" } } } }
+                        }
+                    }
+                }
+            })
+        });
+
+        if (!response.ok) throw new Error("Firecrawl failed");
+        const data = await response.json();
+        const content = data.data.json;
+
+        return `
+            Business Summary: ${content.business_summary || "N/A"}
+            Services: ${(content.services || []).join(", ")}
+            Pricing: ${content.pricing || "N/A"}
+            Hours: ${content.business_hours || "N/A"}
+            Location: ${content.location_details || "N/A"}
+            FAQs: ${(content.faqs || []).map(f => `Q: ${f.q} A: ${f.a}`).join(" | ")}
+        `.trim();
+    } catch (err) {
+        addDebugLog(`⚠️ Scraping failed for ${url}: ${err.message}`);
+        return "General business information (scraping unavailable)";
+    }
+};
+
+/**
+ * DEMO PIPELINE: Lead capture -> Scrape -> Personalized Call
+ */
+app.post("/api/start-demo", async (req, res) => {
+    addDebugLog("🚀 STARTING DEMO PIPELINE...");
+    const { firstName, lastName, phone, email, companyName, websiteURL } = req.body;
+
+    if (!phone || !firstName) {
+        return res.status(400).json({ error: "Missing required lead info (Name, Phone)" });
+    }
+
+    try {
+        // 1. Create/Update Lead in GHL
+        addDebugLog(`👤 Syncing lead: ${firstName} ${lastName || ""} (${companyName || "No Company"})`);
+        const contactRes = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
+            method: "POST",
+            headers: getGhlHeaders(),
+            body: JSON.stringify({
+                firstName,
+                lastName: lastName || "",
+                name: `${firstName} ${lastName || ""}`.trim(),
+                email,
+                phone,
+                companyName,
+                website: websiteURL,
+                locationId: process.env.GHL_LOCATION_ID,
+                tags: ["AI-Demo-Lead", "Web-Widget"]
+            })
+        });
+
+        // 2. Scrape Website for Context
+        const businessContext = await scrapeBusinessContext(websiteURL);
+        addDebugLog("📝 Context extracted successfully.");
+
+        // 3. Initialize Personalized Retell Session
+        addDebugLog("🎙️ Initializing personalized Retell session...");
+        const retellResponse = await fetch("https://api.retellai.com/v2/create-web-call", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${process.env.RETELL_API_KEY}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                agent_id: process.env.RETELL_AGENT_ID,
+                retell_llm_dynamic_variables: {
+                    "contact_first_name": firstName,
+                    "contact_company_name": companyName || "your business",
+                    "business_context": businessContext
+                }
+            }),
+        });
+
+        if (!retellResponse.ok) {
+            const error = await retellResponse.json();
+            throw new Error(error.message || "Retell session failed");
+        }
+
+        const retellData = await retellResponse.json();
+        addDebugLog(`✅ Demo session ready: ${retellData.call_id}`);
+
+        res.json({
+            success: true,
+            access_token: retellData.access_token,
+            call_id: retellData.call_id
+        });
+
+    } catch (err) {
+        addDebugLog(`❌ Demo Pipeline Error: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 const findContactByPhoneOrEmail = async (phone, email) => {
     const cleanPhone = normalizePhone(phone);
     const strategies = [];
