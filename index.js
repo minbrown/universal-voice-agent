@@ -476,18 +476,19 @@ app.post("/retell/check_availability", async (req, res) => {
             if (contact) {
                 contactName = contact.firstName || null;
                 addDebugLog(`Found contact: ${contact.firstName} ${contact.lastName || ""} (${contact.id})`);
-                const apptUrl = `https://services.leadconnectorhq.com/contacts/${contact.id}/appointments`;
-                const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
-                const aData = await aRes.json();
-                const appts = aData?.appointments || [];
-                const nowMs = now.getTime();
 
-                existingAppointments = appts
+                // Use calendar events endpoint (contacts/{id}/appointments returns empty!)
+                const futureMs = now.getTime() + 30 * 24 * 60 * 60 * 1000;
+                const eventsUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${futureMs}`;
+                const eRes = await fetch(eventsUrl, { headers: getGhlHeaders() });
+                const eData = await eRes.json();
+                const events = eData?.events || [];
+
+                existingAppointments = events
                     .filter(e => {
                         const status = (e.appointmentStatus || e.status || "").toLowerCase();
-                        return e.calendarId === calendarId &&
-                            (status === 'booked' || status === 'confirmed' || status === 'new') &&
-                            new Date(e.startTime).getTime() > nowMs;
+                        return e.contactId === contact.id &&
+                            (status === 'booked' || status === 'confirmed' || status === 'new');
                     })
                     .map(e => ({
                         appointment_id: e.id,
@@ -570,19 +571,25 @@ app.post("/retell/book_appointment", async (req, res) => {
         // Always cancel existing future appointments for this contact before creating new
         if (contactId) {
             try {
-                const apptUrl = `https://services.leadconnectorhq.com/contacts/${contactId}/appointments`;
-                const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
-                const aData = await aRes.json();
-                const futureAppts = (aData?.appointments || []).filter(e => {
+                // Use calendar events endpoint (contacts/{id}/appointments returns empty!)
+                const now = Date.now();
+                const future = now + 30 * 24 * 60 * 60 * 1000;
+                const eventsUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${process.env.GHL_CALENDAR_ID}&startTime=${now}&endTime=${future}`;
+                const eRes = await fetch(eventsUrl, { headers: getGhlHeaders() });
+                const eData = await eRes.json();
+                const events = eData?.events || [];
+
+                const futureAppts = events.filter(e => {
                     const status = (e.appointmentStatus || e.status || "").toLowerCase();
-                    return e.calendarId === process.env.GHL_CALENDAR_ID &&
-                        (status === 'booked' || status === 'confirmed' || status === 'new') &&
-                        new Date(e.startTime).getTime() > Date.now();
+                    return e.contactId === contactId &&
+                        (status === 'booked' || status === 'confirmed' || status === 'new');
                 });
+
+                addDebugLog(`Found ${futureAppts.length} existing appointments for contact ${contactId} to cancel`);
 
                 for (const old of futureAppts) {
                     addDebugLog(`🗑️ Cancelling old appointment: ${old.id} at ${old.startTime}`);
-                    await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${old.id}`, {
+                    const cancelRes = await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${old.id}`, {
                         method: "PUT",
                         headers: getGhlHeaders("2021-04-15"),
                         body: JSON.stringify({
@@ -591,6 +598,8 @@ app.post("/retell/book_appointment", async (req, res) => {
                             appointmentStatus: "cancelled"
                         })
                     });
+                    const cancelData = await cancelRes.json();
+                    addDebugLog(`Cancel response (${cancelRes.status}): ${JSON.stringify(cancelData).substring(0, 200)}`);
                 }
                 if (futureAppts.length > 0) {
                     addDebugLog(`✅ Cancelled ${futureAppts.length} old appointment(s)`);
