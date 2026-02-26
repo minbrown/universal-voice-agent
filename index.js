@@ -440,6 +440,9 @@ app.post("/retell/check_availability", async (req, res) => {
     const phone = resolvePhone(req);
     const email = args?.email || call?.metadata?.email;
 
+    // Detailed logging for phone resolution debugging
+    addDebugLog(`📞 Phone resolution: args.phone=${args?.phone}, call.from_number=${call?.from_number}, metadata.phone=${call?.metadata?.phone}, resolved=${phone}`);
+
     const calendarId = process.env.GHL_CALENDAR_ID;
     const now = new Date();
 
@@ -466,12 +469,13 @@ app.post("/retell/check_availability", async (req, res) => {
 
         // 2. Quick check for existing appointments (single contact lookup, no mega scan)
         let existingAppointments = [];
-        const cleanPhone = phone ? normalizePhone(phone) : null;
+        let contactName = null;
 
-        if (cleanPhone || email) {
-            const contact = await findContactByPhoneOrEmail(cleanPhone, email);
+        if (phone || email) {
+            const contact = await findContactByPhoneOrEmail(phone, email);
             if (contact) {
-                addDebugLog(`Found contact: ${contact.firstName} (${contact.id})`);
+                contactName = contact.firstName || null;
+                addDebugLog(`Found contact: ${contact.firstName} ${contact.lastName || ""} (${contact.id})`);
                 const apptUrl = `https://services.leadconnectorhq.com/contacts/${contact.id}/appointments`;
                 const aRes = await fetch(apptUrl, { headers: getGhlHeaders() });
                 const aData = await aRes.json();
@@ -490,14 +494,17 @@ app.post("/retell/check_availability", async (req, res) => {
                         time: e.startTime,
                         title: e.title || "Appointment"
                     }));
+            } else {
+                addDebugLog(`❌ No contact found for phone=${phone}, email=${email}`);
             }
         }
 
-        addDebugLog(`Result: ${availableSlots.length} slots, ${existingAppointments.length} existing appointments`);
+        addDebugLog(`Result: ${availableSlots.length} slots, ${existingAppointments.length} existing appointments, contact=${contactName}`);
 
         res.json({
             available_slots: availableSlots.slice(0, 5),
-            existing_appointments: existingAppointments
+            existing_appointments: existingAppointments,
+            contact_name: contactName
         });
     } catch (err) {
         console.error("❌ Availability Error:", err.message);
