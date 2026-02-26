@@ -1,9 +1,27 @@
 {
     "version": 2,
-    "rewrites": [
+    "builds": [
         {
-            "source": "/(.*)",
-            "destination": "/index.js"
+            "src": "public/**",
+            "use": "@vercel/static"
+        },
+        {
+            "src": "index.js",
+            "use": "@vercel/node"
+        }
+    ],
+    "routes": [
+        {
+            "src": "/widget.html",
+            "dest": "/public/widget.html"
+        },
+        {
+            "src": "/images/(.*)",
+            "dest": "/public/images/$1"
+        },
+        {
+            "src": "/(.*)",
+            "dest": "/index.js"
         }
     ]
 }
