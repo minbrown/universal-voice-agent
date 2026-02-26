@@ -41,16 +41,21 @@ const normalizePhone = (phone) => {
 
 const resolvePhone = (req) => {
     const { args, call } = req.body;
-    let phone = args?.phone || args?.phoneNumber || args?.user_phone_number;
 
-    // If phone looks like a template tag or is non-string, clear it to trigger fallback
-    if (phone && (typeof phone !== 'string' || phone.includes("{{") || phone.includes("undefined"))) {
-        phone = null;
+    // 1. ALWAYS prefer the system-provided caller ID (reliable, not LLM-generated)
+    if (call?.from_number) {
+        return call.from_number;
     }
 
-    // Fallback to Retell Metadata (phone calls have from_number, web calls have metadata)
-    if (!phone) {
-        phone = call?.from_number || call?.user_phone_number || call?.metadata?.phone;
+    // 2. For web calls, use metadata phone
+    if (call?.metadata?.phone) {
+        return call.metadata.phone;
+    }
+
+    // 3. Last resort: use what the agent passed (may be unreliable)
+    let phone = args?.phone || args?.phoneNumber || args?.user_phone_number;
+    if (phone && (typeof phone !== 'string' || phone.includes("{{") || phone.includes("undefined"))) {
+        phone = null;
     }
 
     return phone;
@@ -505,7 +510,9 @@ app.post("/retell/check_availability", async (req, res) => {
         res.json({
             available_slots: availableSlots.slice(0, 5),
             existing_appointments: existingAppointments,
-            contact_name: contactName
+            contact_name: contactName,
+            current_date: new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" }),
+            current_time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
         });
     } catch (err) {
         console.error("❌ Availability Error:", err.message);
