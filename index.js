@@ -232,22 +232,51 @@ app.post("/api/start-demo", async (req, res) => {
 const findContactByPhoneOrEmail = async (phone, email) => {
     const cleanPhone = normalizePhone(phone);
 
-    // Strategy 1: Fast duplicate search by phone (single API call)
+    // Strategy 1: Try E.164 format first (e.g. +15551234567)
+    if (phone && phone !== cleanPhone) {
+        try {
+            const dupUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(phone)}`;
+            const res = await fetch(dupUrl, { headers: getGhlHeaders() });
+            const data = await res.json();
+            if (data?.contact) {
+                addDebugLog(`🏆 Found contact by E.164 phone: ${data.contact.id}`);
+                return data.contact;
+            }
+        } catch (e) {
+            addDebugLog(`⚠️ E.164 phone search failed: ${e.message}`);
+        }
+    }
+
+    // Strategy 2: Try normalized 10-digit phone
     if (cleanPhone) {
         try {
             const dupUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
             const res = await fetch(dupUrl, { headers: getGhlHeaders() });
             const data = await res.json();
             if (data?.contact) {
-                addDebugLog(`🏆 Found contact by phone: ${data.contact.id}`);
+                addDebugLog(`🏆 Found contact by normalized phone: ${data.contact.id}`);
                 return data.contact;
             }
         } catch (e) {
-            addDebugLog(`⚠️ Phone search failed: ${e.message}`);
+            addDebugLog(`⚠️ Normalized phone search failed: ${e.message}`);
+        }
+
+        // Strategy 3: General query search by phone
+        try {
+            const queryUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(cleanPhone)}`;
+            const res = await fetch(queryUrl, { headers: getGhlHeaders() });
+            const data = await res.json();
+            const contact = data?.contacts?.[0];
+            if (contact) {
+                addDebugLog(`🏆 Found contact by query: ${contact.id}`);
+                return contact;
+            }
+        } catch (e) {
+            addDebugLog(`⚠️ Query search failed: ${e.message}`);
         }
     }
 
-    // Strategy 2: Fallback to email search
+    // Strategy 4: Fallback to email search
     if (email) {
         try {
             const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`;
@@ -263,6 +292,7 @@ const findContactByPhoneOrEmail = async (phone, email) => {
         }
     }
 
+    addDebugLog(`❌ No contact found for phone: ${phone}, email: ${email}`);
     return null;
 };
 
