@@ -4,11 +4,16 @@
         {
             "src": "index.js",
             "use": "@vercel/node"
+        },
+        {
+            "src": "public/**",
+            "use": "@vercel/static"
         }
     ],
     "routes": [
         {
-            "handle": "filesystem"
+            "src": "/widget.html",
+            "dest": "/public/widget.html"
         },
         {
             "src": "/(.*)",
