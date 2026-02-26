@@ -231,32 +231,38 @@ app.post("/api/start-demo", async (req, res) => {
 
 const findContactByPhoneOrEmail = async (phone, email) => {
     const cleanPhone = normalizePhone(phone);
-    const strategies = [];
 
-    if (phone) strategies.push({ type: "duplicate", val: phone }); // E.164
-    if (cleanPhone && cleanPhone !== phone) strategies.push({ type: "duplicate", val: cleanPhone });
-    if (email) strategies.push({ type: "email", val: email });
-    if (cleanPhone) strategies.push({ type: "query", val: cleanPhone });
-
-    for (const s of strategies) {
-        addDebugLog(`🔍 Searching (${s.type}): ${s.val}`);
-        let url = "";
-        if (s.type === "duplicate") url = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(s.val)}`;
-        else if (s.type === "email") url = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(s.val)}`;
-        else url = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&query=${encodeURIComponent(s.val)}`;
-
+    // Strategy 1: Fast duplicate search by phone (single API call)
+    if (cleanPhone) {
         try {
-            const res = await fetch(url, { headers: getGhlHeaders() });
+            const dupUrl = `https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent(cleanPhone)}`;
+            const res = await fetch(dupUrl, { headers: getGhlHeaders() });
             const data = await res.json();
-            const contact = data?.contact || data?.contacts?.[0];
+            if (data?.contact) {
+                addDebugLog(`🏆 Found contact by phone: ${data.contact.id}`);
+                return data.contact;
+            }
+        } catch (e) {
+            addDebugLog(`⚠️ Phone search failed: ${e.message}`);
+        }
+    }
+
+    // Strategy 2: Fallback to email search
+    if (email) {
+        try {
+            const searchUrl = `https://services.leadconnectorhq.com/contacts/?locationId=${process.env.GHL_LOCATION_ID}&email=${encodeURIComponent(email)}`;
+            const res = await fetch(searchUrl, { headers: getGhlHeaders() });
+            const data = await res.json();
+            const contact = data?.contacts?.[0];
             if (contact) {
-                addDebugLog(`🏆 Hit! Found contact: ${contact.id}`);
+                addDebugLog(`🏆 Found contact by email: ${contact.id}`);
                 return contact;
             }
         } catch (e) {
-            addDebugLog(`⚠️ Search strategy ${s.type} failed: ${e.message}`);
+            addDebugLog(`⚠️ Email search failed: ${e.message}`);
         }
     }
+
     return null;
 };
 
