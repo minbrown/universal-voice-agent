@@ -48,9 +48,9 @@ const resolvePhone = (req) => {
         phone = null;
     }
 
-    // Fallback to Retell Metadata
+    // Fallback to Retell Metadata (phone calls have from_number, web calls have metadata)
     if (!phone) {
-        phone = call?.from_number || call?.user_phone_number;
+        phone = call?.from_number || call?.user_phone_number || call?.metadata?.phone;
     }
 
     return phone;
@@ -189,8 +189,18 @@ app.post("/api/start-demo", async (req, res) => {
             },
             body: JSON.stringify({
                 agent_id: process.env.RETELL_AGENT_ID,
+                metadata: {
+                    phone,
+                    email,
+                    firstName,
+                    lastName: lastName || "",
+                    companyName: companyName || ""
+                },
                 retell_llm_dynamic_variables: {
                     "contact_first_name": firstName,
+                    "contact_last_name": lastName || "",
+                    "contact_phone": phone,
+                    "contact_email": email || "",
                     "contact_company_name": companyName || "your business",
                     "business_context": businessContext
                 }
@@ -537,11 +547,11 @@ app.post("/retell/check_availability", async (req, res) => {
 
 app.post("/retell/book_appointment", async (req, res) => {
     console.log("\n🤖 AI BOOKING ATTEMPT...");
-    const { args } = req.body;
+    const { args, call } = req.body;
     const phone = resolvePhone(req);
-    const firstName = args.first_name || args.firstName || "Unknown";
-    const lastName = args.last_name || args.lastName || "";
-    const email = args.email;
+    const firstName = args.first_name || args.firstName || call?.metadata?.firstName || "Unknown";
+    const lastName = args.last_name || args.lastName || call?.metadata?.lastName || "";
+    const email = args.email || call?.metadata?.email;
     const slot = args.date_time || args.dateTime;
     const appointmentId = args.appointment_id; // Targeted reschedule
 
