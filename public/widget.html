@@ -250,6 +250,7 @@
         const orb = document.getElementById('orb');
         const form = document.getElementById('lead-form');
         const active = document.getElementById('demo-active');
+        let appointmentBooked = false;
 
 
         startBtn.onclick = async () => {
@@ -265,6 +266,7 @@
             startBtn.disabled = true;
             startBtn.innerText = 'Scraping & Personalizing...';
             status.innerText = '🔥 Fetching website data via Firecrawl...';
+            appointmentBooked = false;
 
             try {
                 const response = await fetch('/api/start-demo', {
@@ -297,11 +299,35 @@
             retellClient.stopCall();
         };
 
+        // Listen for tool call results to detect bookings
+        retellClient.on('update', (update) => {
+            if (update?.transcript) {
+                // Check if any tool call resulted in a successful booking
+                for (const entry of update.transcript) {
+                    if (entry.role === 'tool_call_result' && entry.content) {
+                        try {
+                            const result = typeof entry.content === 'string' ? JSON.parse(entry.content) : entry.content;
+                            if (result?.status === 'success' || result?.message?.includes('successfully')) {
+                                appointmentBooked = true;
+                            }
+                        } catch (e) { /* ignore parse errors */ }
+                    }
+                }
+            }
+        });
+
         retellClient.on('call_ended', () => {
             orb.classList.remove('active');
             active.classList.add('hidden');
 
-            status.innerText = 'Session finished. Ready to chat?';
+            const bookingLink = document.getElementById('booking-link');
+            if (appointmentBooked) {
+                status.innerText = '✅ Your appointment has been confirmed! We look forward to seeing you.';
+                if (bookingLink) bookingLink.style.display = 'none';
+            } else {
+                status.innerText = 'Demo complete! Want to see this in action for your business?';
+                if (bookingLink) bookingLink.style.display = 'block';
+            }
         });
 
         retellClient.on('error', (err) => {
