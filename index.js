@@ -100,31 +100,111 @@ app.get("/", (req, res) => {
 });
 
 /**
- * FIRECRAWL UTILITY: Scrape business context for demos
+ * FIRECRAWL UTILITY: Deep-scrape business context for demos
+ * Strategy: Map site → scrape key pages → extract structured data
  */
 const scrapeBusinessContext = async (url) => {
     if (!url) return "General business information";
-    addDebugLog(`🔥 Scraping website: ${url}`);
+    addDebugLog(`🔥 Deep-scraping website: ${url}`);
+
+    const fcHeaders = {
+        "Authorization": `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+        "Content-Type": "application/json"
+    };
+
     try {
-        const response = await fetch("https://api.firecrawl.dev/v1/scrape", {
+        // Step 1: Map the site to discover all pages
+        addDebugLog("📍 Mapping site structure...");
+        const mapRes = await fetch("https://api.firecrawl.dev/v1/map", {
             method: "POST",
-            headers: {
-                "Authorization": `Bearer ${process.env.FIRECRAWL_API_KEY}`,
-                "Content-Type": "application/json"
-            },
+            headers: fcHeaders,
+            body: JSON.stringify({ url, limit: 20 })
+        });
+
+        let pagesToScrape = [url];
+        if (mapRes.ok) {
+            const mapData = await mapRes.json();
+            const allLinks = (mapData.links || []).map(l => typeof l === 'string' ? l : l.url).filter(Boolean);
+
+            // Identify key pages by URL patterns
+            const keyPatterns = /about|contact|service|pricing|price|menu|team|staff|hour|location|faq|policy|policies/i;
+            const keyPages = allLinks.filter(link => keyPatterns.test(link));
+
+            // Always include homepage + up to 3 key pages
+            pagesToScrape = [url, ...keyPages.slice(0, 3)];
+            // Deduplicate
+            pagesToScrape = [...new Set(pagesToScrape)];
+            addDebugLog(`Found ${allLinks.length} pages, scraping ${pagesToScrape.length} key pages`);
+        }
+
+        // Step 2: Scrape key pages in parallel (markdown is more reliable than JSON)
+        addDebugLog("📄 Scraping key pages...");
+        const scrapePromises = pagesToScrape.map(pageUrl =>
+            fetch("https://api.firecrawl.dev/v1/scrape", {
+                method: "POST",
+                headers: fcHeaders,
+                body: JSON.stringify({
+                    url: pageUrl,
+                    formats: ["markdown"],
+                    onlyMainContent: true,
+                    waitFor: 5000
+                })
+            }).then(r => r.ok ? r.json() : null).catch(() => null)
+        );
+
+        const scrapeResults = await Promise.all(scrapePromises);
+
+        // Combine all markdown content
+        let combinedContent = "";
+        for (let i = 0; i < scrapeResults.length; i++) {
+            const result = scrapeResults[i];
+            if (result?.data?.markdown) {
+                const pageTitle = result.data.metadata?.title || pagesToScrape[i];
+                combinedContent += `\n\n=== PAGE: ${pageTitle} ===\n${result.data.markdown}`;
+            }
+        }
+
+        if (!combinedContent.trim()) {
+            addDebugLog("⚠️ No content extracted from any page");
+            return "General business excellence and high-quality service.";
+        }
+
+        // Step 3: Extract structured data from combined content
+        addDebugLog("🧠 Extracting business intelligence...");
+
+        // Trim to avoid token limits (keep first ~8000 chars)
+        const trimmed = combinedContent.substring(0, 8000);
+
+        const extractRes = await fetch("https://api.firecrawl.dev/v1/scrape", {
+            method: "POST",
+            headers: fcHeaders,
             body: JSON.stringify({
                 url,
                 formats: ["json"],
                 jsonOptions: {
-                    prompt: "Extract compelling sales info: unique selling points, detailed service tiers with pricing, and FAQs that handle common objections.",
+                    prompt: `Analyze this combined website content and extract ALL business details. Be thorough:\n\n${trimmed}`,
                     schema: {
                         type: "object",
                         properties: {
-                            business_summary: { type: "string" },
-                            unique_selling_points: { type: "array", items: { type: "string" } },
-                            services: { type: "array", items: { type: "object", properties: { name: { type: "string" }, price: { type: "string" }, description: { type: "string" } } } },
+                            business_name: { type: "string" },
+                            business_summary: { type: "string", description: "2-3 sentence description of what the business does" },
+                            owner_name: { type: "string" },
+                            contact_phone: { type: "string" },
+                            contact_email: { type: "string" },
+                            address: { type: "string" },
                             business_hours: { type: "string" },
-                            location_details: { type: "string" },
+                            unique_selling_points: { type: "array", items: { type: "string" } },
+                            services: {
+                                type: "array", items: {
+                                    type: "object", properties: {
+                                        name: { type: "string" },
+                                        price: { type: "string" },
+                                        description: { type: "string" },
+                                        duration: { type: "string" }
+                                    }
+                                }
+                            },
+                            policies: { type: "string", description: "Booking, cancellation, and other policies" },
                             faqs: { type: "array", items: { type: "object", properties: { q: { type: "string" }, a: { type: "string" } } } }
                         }
                     }
@@ -132,20 +212,38 @@ const scrapeBusinessContext = async (url) => {
             })
         });
 
-        if (!response.ok) throw new Error("Firecrawl failed");
-        const data = await response.json();
-        const content = data.data.json;
+        let structured = null;
+        if (extractRes.ok) {
+            const extractData = await extractRes.json();
+            structured = extractData?.data?.json;
+        }
 
-        return `
-            Bio: ${content.business_summary || "N/A"}
-            USPs: ${(content.unique_selling_points || []).join(" | ")}
-            Services: ${(content.services || []).map(s => `${s.name}: ${s.price || 'Contact'} (${s.description || ''})`).join(" || ")}
-            Hours: ${content.business_hours || "N/A"}
-            Location: ${content.location_details || "N/A"}
-            FAQs: ${(content.faqs || []).map(f => `Q: ${f.q} A: ${f.a}`).join(" | ")}
-        `.trim();
+        // Build rich context string
+        if (structured) {
+            const ctx = [
+                structured.business_name ? `Business: ${structured.business_name}` : '',
+                structured.business_summary ? `About: ${structured.business_summary}` : '',
+                structured.owner_name ? `Owner: ${structured.owner_name}` : '',
+                structured.contact_phone ? `Phone: ${structured.contact_phone}` : '',
+                structured.contact_email ? `Email: ${structured.contact_email}` : '',
+                structured.address ? `Address: ${structured.address}` : '',
+                structured.business_hours ? `Hours: ${structured.business_hours}` : '',
+                (structured.unique_selling_points?.length) ? `USPs: ${structured.unique_selling_points.join(" | ")}` : '',
+                (structured.services?.length) ? `Services: ${structured.services.map(s => `${s.name}: $${s.price || 'Contact'}${s.duration ? ` (${s.duration})` : ''} - ${s.description || ''}`).join(" || ")}` : '',
+                structured.policies ? `Policies: ${structured.policies}` : '',
+                (structured.faqs?.length) ? `FAQs: ${structured.faqs.map(f => `Q: ${f.q} A: ${f.a}`).join(" | ")}` : ''
+            ].filter(Boolean).join("\n");
+
+            addDebugLog(`✅ Rich context extracted (${ctx.length} chars)`);
+            return ctx;
+        }
+
+        // Fallback: return raw combined markdown (trimmed)
+        addDebugLog("⚠️ JSON extraction failed, using raw markdown");
+        return trimmed;
+
     } catch (err) {
-        addDebugLog(`⚠️ Scraping failed for ${url}: ${err.message}`);
+        addDebugLog(`⚠️ Deep scraping failed for ${url}: ${err.message}`);
         return "General business excellence and high-quality service.";
     }
 };
