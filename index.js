@@ -202,7 +202,9 @@ app.post("/api/start-demo", async (req, res) => {
                     "contact_phone": phone,
                     "contact_email": email || "",
                     "contact_company_name": companyName || "your business",
-                    "business_context": businessContext
+                    "business_context": businessContext,
+                    "current_date": new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" }),
+                    "current_time": new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
                 }
             }),
         });
@@ -690,7 +692,7 @@ app.post("/retell/book_appointment", async (req, res) => {
 
             if (existing) {
                 addDebugLog(`🔄 Executing Reschedule for: ${existing.id}`);
-                const body = {
+                const rescheduleBody = {
                     startTime,
                     endTime,
                     title: `Voice AI Update: ${firstName}`,
@@ -703,11 +705,19 @@ app.post("/retell/book_appointment", async (req, res) => {
                 bookRes = await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${existing.id}`, {
                     method: "PUT",
                     headers: getGhlHeaders("2021-04-15"),
-                    body: JSON.stringify(body)
+                    body: JSON.stringify(rescheduleBody)
                 });
-            } else {
+
+                // If reschedule fails (stale ID), fall back to new booking
+                if (!bookRes.ok) {
+                    addDebugLog(`⚠️ Reschedule failed (${bookRes.status}), falling back to new booking...`);
+                    existing = null; // fall through to new booking below
+                }
+            }
+
+            if (!existing) {
                 console.log("🆕 Booking new appointment...");
-                const body = {
+                const newBody = {
                     calendarId: process.env.GHL_CALENDAR_ID,
                     locationId: process.env.GHL_LOCATION_ID,
                     contactId,
@@ -718,11 +728,11 @@ app.post("/retell/book_appointment", async (req, res) => {
                     assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
                     ignoreFreeSlotValidation: true
                 };
-                console.log("📡 New Booking Request Body:", JSON.stringify(body, null, 2));
+                addDebugLog(`📡 New Booking: ${JSON.stringify(newBody)}`);
                 bookRes = await fetch("https://services.leadconnectorhq.com/calendars/events/appointments", {
                     method: "POST",
                     headers: getGhlHeaders("2021-04-15"),
-                    body: JSON.stringify(body)
+                    body: JSON.stringify(newBody)
                 });
             }
         }
