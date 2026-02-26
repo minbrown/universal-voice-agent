@@ -58,6 +58,38 @@ const resolvePhone = (req) => {
 
 app.use(express.static(join(__dirname, "public")));
 
+/**
+ * RETELL WEB CALL: Support for the online widget
+ */
+app.post("/retell/create-web-call", async (req, res) => {
+    addDebugLog("🤖 CREATING WEB CALL SESSION...");
+    try {
+        const response = await fetch("https://api.retellai.com/v2/create-web-call", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${process.env.RETELL_API_KEY}`,
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+                agent_id: process.env.RETELL_AGENT_ID,
+            }),
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            addDebugLog(`❌ Retell Web Call Error: ${JSON.stringify(errorData)}`);
+            throw new Error(errorData.message || "Failed to create web call");
+        }
+
+        const data = await response.json();
+        addDebugLog(`✅ Web Call Session Created: ${data.call_id}`);
+        res.json(data);
+    } catch (err) {
+        addDebugLog(`❌ Web Call Session Failed: ${err.message}`);
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.get("/", (req, res) => {
     res.sendFile(join(__dirname, "public", "index.html"));
 });

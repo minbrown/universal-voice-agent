@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -17,7 +18,11 @@
             --error: #ff4444;
         }
 
-        * { box-sizing: border-box; margin: 0; padding: 0; }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
 
         body {
             font-family: 'Outfit', sans-serif;
@@ -37,19 +42,42 @@
             border: 1px solid var(--border);
             border-radius: 24px;
             padding: 40px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.5);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
         }
 
-        h1 { font-size: 24px; margin-bottom: 8px; font-weight: 700; letter-spacing: -0.5px; }
-        p.subtitle { color: var(--muted); font-size: 14px; margin-bottom: 32px; }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+        }
 
-        .form-group { margin-bottom: 20px; text-align: left; }
-        label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
-        
-        input, select {
+        p.subtitle {
+            color: var(--muted);
+            font-size: 14px;
+            margin-bottom: 32px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+            text-align: left;
+        }
+
+        label {
+            display: block;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--muted);
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        input,
+        select {
             width: 100%;
             padding: 14px 18px;
-            background: rgba(255,255,255,0.05);
+            background: rgba(255, 255, 255, 0.05);
             border: 1px solid var(--border);
             border-radius: 12px;
             color: white;
@@ -58,10 +86,11 @@
             transition: 0.2s;
         }
 
-        input:focus, select:focus {
+        input:focus,
+        select:focus {
             outline: none;
             border-color: var(--accent);
-            background: rgba(255,255,255,0.08);
+            background: rgba(255, 255, 255, 0.08);
         }
 
         .btn {
@@ -78,9 +107,19 @@
             margin-top: 10px;
         }
 
-        .btn:hover { transform: translateY(-2px); opacity: 0.9; }
-        .btn:active { transform: translateY(0); }
-        .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .btn:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+        }
 
         .status {
             margin-top: 24px;
@@ -91,35 +130,53 @@
             word-break: break-all;
         }
 
-        .status.success { display: block; background: rgba(0, 255, 136, 0.1); border: 1px solid var(--success); color: var(--success); }
-        .status.error { display: block; background: rgba(255, 68, 68, 0.1); border: 1px solid var(--error); color: var(--error); }
+        .status.success {
+            display: block;
+            background: rgba(0, 255, 136, 0.1);
+            border: 1px solid var(--success);
+            color: var(--success);
+        }
+
+        .status.error {
+            display: block;
+            background: rgba(255, 68, 68, 0.1);
+            border: 1px solid var(--error);
+            color: var(--error);
+        }
 
         .loader {
             display: inline-block;
             width: 20px;
             height: 20px;
-            border: 2px solid rgba(255,255,255,.3);
+            border: 2px solid rgba(255, 255, 255, .3);
             border-radius: 50%;
             border-top-color: #fff;
             animation: spin 1s ease-in-out infinite;
             display: none;
         }
 
-        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <h1>GHL Scheduler Debugger</h1>
         <p class="subtitle">Test availability and booking logic instantly.</p>
 
         <div class="form-group">
-            <button class="btn" id="load-slots-btn" style="background: rgba(255,255,255,0.1); color: white; border: 1px solid var(--border);">
+            <button class="btn" id="load-slots-btn"
+                style="background: rgba(255,255,255,0.1); color: white; border: 1px solid var(--border);">
                 1. Load Available Slots
             </button>
         </div>
 
-        <div id="booking-section" style="display: none; border-top: 1px solid var(--border); padding-top: 24px; margin-top: 24px;">
+        <div id="booking-section"
+            style="display: none; border-top: 1px solid var(--border); padding-top: 24px; margin-top: 24px;">
             <div class="form-group">
                 <label>Available Slots</label>
                 <select id="slot-select"></select>
@@ -136,6 +193,13 @@
         </div>
 
         <div id="status-box" class="status"></div>
+
+        <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); text-align: center;">
+            <a href="/widget.html"
+                style="color: var(--muted); text-decoration: none; font-size: 14px; font-weight: 600;">
+                🚀 Launch Online Voice Widget Demo
+            </a>
+        </div>
     </div>
 
     <script>
@@ -211,4 +275,5 @@
         };
     </script>
 </body>
+
 </html>

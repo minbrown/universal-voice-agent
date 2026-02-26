@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Voice Agent Widget</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0a0a;
+            --accent: #ffffff;
+            --text: #ffffff;
+            --muted: #888888;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        .widget-container {
+            text-align: center;
+            animation: fadeIn 1s ease-out;
+        }
+
+        .voice-orb {
+            width: 120px;
+            height: 120px;
+            background: radial-gradient(circle, #ffffff 0%, rgba(255, 255, 255, 0) 70%);
+            border-radius: 50%;
+            margin: 0 auto 30px;
+            cursor: pointer;
+            transition: 0.3s;
+            position: relative;
+            box-shadow: 0 0 30px rgba(255, 255, 255, 0.2);
+        }
+
+        .voice-orb:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 50px rgba(255, 255, 255, 0.4);
+        }
+
+        .voice-orb.active {
+            animation: pulse 1.5s infinite ease-in-out;
+            background: radial-gradient(circle, #00ff88 0%, rgba(0, 255, 136, 0) 70%);
+            box-shadow: 0 0 50px rgba(0, 255, 136, 0.4);
+        }
+
+        h1 {
+            font-weight: 700;
+            font-size: 28px;
+            margin-bottom: 10px;
+            letter-spacing: -1px;
+        }
+
+        p {
+            color: var(--muted);
+            font-size: 16px;
+            margin-bottom: 40px;
+        }
+
+        .call-btn {
+            background: white;
+            color: black;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 30px;
+            font-weight: 700;
+            font-size: 16px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+
+        .call-btn:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+        }
+
+        .call-btn:active {
+            transform: translateY(0);
+        }
+
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 0.8;
+            }
+
+            50% {
+                transform: scale(1.1);
+                opacity: 1;
+            }
+
+            100% {
+                transform: scale(1);
+                opacity: 0.8;
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="widget-container">
+        <div id="orb" class="voice-orb"></div>
+        <h1>Talk to Our AI</h1>
+        <p>Experience the next generation of customer support.</p>
+        <button id="call-btn" class="call-btn">Start Conversation</button>
+    </div>
+
+    <!-- Retell Web SDK -->
+    <script src="https://unpkg.com/retell-client-js-sdk@0.2.1/dist/index.js"></script>
+
+    <script>
+        const orb = document.getElementById('orb');
+        const btn = document.getElementById('call-btn');
+        let isCalling = false;
+
+        // Initialize Client (will be globally available from the script tag)
+        const retellClient = new RetellWebClient();
+
+        btn.onclick = async () => {
+            if (isCalling) {
+                retellClient.stopCall();
+                return;
+            }
+
+            btn.innerText = 'Connecting...';
+            btn.disabled = true;
+
+            try {
+                // 1. Get Access Token from our backend
+                const response = await fetch('/retell/create-web-call', { method: 'POST' });
+                const data = await response.json();
+
+                if (!data.access_token) throw new Error('No access token received');
+
+                // 2. Start Call
+                await retellClient.startCall({
+                    accessToken: data.access_token,
+                });
+
+                isCalling = true;
+                btn.innerText = 'End Conversation';
+                btn.disabled = false;
+                orb.classList.add('active');
+                console.log('Call started successfully');
+
+            } catch (err) {
+                console.error('Failed to start call:', err);
+                alert('Connection failed. Please check your console.');
+                btn.innerText = 'Start Conversation';
+                btn.disabled = false;
+            }
+        };
+
+        // Listen for call ending
+        retellClient.on('call_ended', () => {
+            isCalling = false;
+            btn.innerText = 'Start Conversation';
+            orb.classList.remove('active');
+            console.log('Call ended');
+        });
+
+        retellClient.on('error', (error) => {
+            console.error('Retell Error:', error);
+            isCalling = false;
+            btn.innerText = 'Start Conversation';
+            orb.classList.remove('active');
+        });
+    </script>
+</body>
+
+</html>
