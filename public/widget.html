@@ -240,10 +240,9 @@
         <p id="status"></p>
     </div>
 
-    <!-- Retell Web SDK -->
-    <script src="https://unpkg.com/retell-client-js-sdk@0.2.1/dist/index.js"></script>
+    <script type="module">
+        import { RetellWebClient } from 'https://cdn.jsdelivr.net/npm/retell-client-js-sdk@2.0.7/+esm';
 
-    <script>
         const retellClient = new RetellWebClient();
         const startBtn = document.getElementById('start-btn');
         const endBtn = document.getElementById('end-btn');
