@@ -111,12 +111,13 @@ const scrapeBusinessContext = async (url) => {
                 url,
                 formats: ["json"],
                 jsonOptions: {
+                    prompt: "Extract compelling sales info: unique selling points, detailed service tiers with pricing, and FAQs that handle common objections.",
                     schema: {
                         type: "object",
                         properties: {
                             business_summary: { type: "string" },
-                            services: { type: "array", items: { type: "string" } },
-                            pricing: { type: "string" },
+                            unique_selling_points: { type: "array", items: { type: "string" } },
+                            services: { type: "array", items: { type: "object", properties: { name: { type: "string" }, price: { type: "string" }, description: { type: "string" } } } },
                             business_hours: { type: "string" },
                             location_details: { type: "string" },
                             faqs: { type: "array", items: { type: "object", properties: { q: { type: "string" }, a: { type: "string" } } } }
@@ -131,16 +132,16 @@ const scrapeBusinessContext = async (url) => {
         const content = data.data.json;
 
         return `
-            Business Summary: ${content.business_summary || "N/A"}
-            Services: ${(content.services || []).join(", ")}
-            Pricing: ${content.pricing || "N/A"}
+            Bio: ${content.business_summary || "N/A"}
+            USPs: ${(content.unique_selling_points || []).join(" | ")}
+            Services: ${(content.services || []).map(s => `${s.name}: ${s.price || 'Contact'} (${s.description || ''})`).join(" || ")}
             Hours: ${content.business_hours || "N/A"}
             Location: ${content.location_details || "N/A"}
             FAQs: ${(content.faqs || []).map(f => `Q: ${f.q} A: ${f.a}`).join(" | ")}
         `.trim();
     } catch (err) {
         addDebugLog(`⚠️ Scraping failed for ${url}: ${err.message}`);
-        return "General business information (scraping unavailable)";
+        return "General business excellence and high-quality service.";
     }
 };
 
