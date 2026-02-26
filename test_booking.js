@@ -1,91 +1,63 @@
-import fetch from "node-fetch";
-import "dotenv/config";
+import fetch from 'node-fetch';
+import dotenv from 'dotenv';
+dotenv.config();
 
-const GHL_HEADERS = {
+const headers = {
     Authorization: `Bearer ${process.env.GHL_API_KEY}`,
-    Version: "2021-07-28",
-    "Content-Type": "application/json"
+    Version: '2021-04-15',
+    'Content-Type': 'application/json'
 };
 
-async function testBooking() {
-    const calendarId = process.env.GHL_CALENDAR_ID;
-    const locationId = process.env.GHL_LOCATION_ID;
-    const assignedUserId = process.env.GHL_ASSIGNED_USER_ID;
+async function main() {
+    // 1. First find the contact
+    const h2 = { ...headers, Version: '2021-07-28' };
+    const dupRes = await fetch(`https://services.leadconnectorhq.com/contacts/search/duplicate?locationId=${process.env.GHL_LOCATION_ID}&number=${encodeURIComponent('+17708755882')}`, { headers: h2 });
+    const dupData = await dupRes.json();
+    console.log("Contact lookup:", dupData?.contact ? `${dupData.contact.firstName} (${dupData.contact.id})` : "NOT FOUND");
 
-    // 1. Create/Identify a Test Contact
-    console.log("👤 Step 1: Ensuring Test Contact exists...");
-    const contactData = {
-        firstName: "Test",
-        lastName: "Booking",
-        email: "test_booking_" + Date.now() + "@example.com",
-        phone: "+15550009999",
-        locationId: locationId
-    };
-
-    const contactRes = await fetch("https://services.leadconnectorhq.com/contacts/", {
-        method: "POST",
-        headers: GHL_HEADERS,
-        body: JSON.stringify(contactData)
-    });
-    const contactResult = await contactRes.json();
-
-    if (!contactRes.ok) {
-        console.error("❌ Failed to create contact:", contactResult);
+    if (!dupData?.contact) {
+        console.log("Cannot test booking without contact. Exiting.");
         return;
     }
 
-    const contactId = contactResult.contact.id;
-    console.log(`✅ Contact Ready: ${contactId}`);
+    const contactId = dupData.contact.id;
 
-    // 2. Select a slot (Hardcoded for testing based on availability output)
-    // We'll pick a slot 2 days from now to be safe
-    const targetDate = new Date();
-    targetDate.setDate(targetDate.getDate() + 2);
-    targetDate.setHours(10, 0, 0, 0); // 10:00 AM
-
-    const startTime = targetDate.toISOString();
-    const endTime = new Date(targetDate.getTime() + 30 * 60000).toISOString();
-
-    console.log(`\n📅 Step 2: Attempting Booking for ${startTime}...`);
-
-    const bookingBody = {
-        calendarId: calendarId,
-        locationId: locationId,
-        contactId: contactId,
-        startTime: startTime,
-        endTime: endTime,
-        title: "Retell AI Test Booking",
+    // 2. Test booking directly
+    const slot = "2026-02-27T10:00:00-05:00";
+    const bookBody = {
+        calendarId: process.env.GHL_CALENDAR_ID,
+        locationId: process.env.GHL_LOCATION_ID,
+        contactId,
+        startTime: new Date(slot).toISOString(),
+        endTime: new Date(new Date(slot).getTime() + 30 * 60000).toISOString(),
+        title: "Test Direct Booking",
         appointmentStatus: "confirmed",
-        assignedUserId: assignedUserId,
-        ignoreFreeSlotValidation: true // Useful for debugging/forcing
+        assignedUserId: process.env.GHL_ASSIGNED_USER_ID,
+        ignoreFreeSlotValidation: true
     };
 
-    console.log("📡 Sending Booking Request...");
+    console.log("\nBooking request:", JSON.stringify(bookBody, null, 2));
 
-    // IMPORTANT: Appointments often require Version 2021-04-15
     const bookRes = await fetch("https://services.leadconnectorhq.com/calendars/events/appointments", {
         method: "POST",
-        headers: {
-            ...GHL_HEADERS,
-            Version: "2021-04-15"
-        },
-        body: JSON.stringify(bookingBody)
+        headers,
+        body: JSON.stringify(bookBody)
     });
 
-    const bookResult = await bookRes.json();
+    const bookData = await bookRes.json();
+    console.log("\nBooking response status:", bookRes.status);
+    console.log("Booking response:", JSON.stringify(bookData, null, 2));
 
-    if (bookRes.ok) {
-        console.log("🚀 SUCCESS! Appointment Booked!");
-        console.log(JSON.stringify(bookResult, null, 2));
-    } else {
-        console.error("❌ BOOKING FAILED!");
-        console.error(`Status: ${bookRes.status}`);
-        console.error("GHL Error Message:", JSON.stringify(bookResult, null, 2));
-
-        if (bookResult.message && bookResult.message.includes("Version")) {
-            console.log("💡 Hint: There might be a Version header mismatch.");
-        }
+    // 3. If success, immediately cancel it
+    if (bookRes.ok && bookData?.id) {
+        console.log("\n✅ Booking succeeded! Cleaning up (cancelling test appointment)...");
+        const cancelRes = await fetch(`https://services.leadconnectorhq.com/calendars/events/appointments/${bookData.id}`, {
+            method: "PUT",
+            headers,
+            body: JSON.stringify({ calendarId: process.env.GHL_CALENDAR_ID, locationId: process.env.GHL_LOCATION_ID, appointmentStatus: "cancelled" })
+        });
+        console.log("Cancel status:", cancelRes.status);
     }
 }
 
-testBooking();
+main().catch(e => console.error(e)).finally(() => process.exit(0));
