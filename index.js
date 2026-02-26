@@ -99,6 +99,10 @@ app.get("/", (req, res) => {
     res.sendFile(join(__dirname, "public", "index.html"));
 });
 
+app.get("/api/debug", (req, res) => {
+    res.json({ logs: debugLogs, count: debugLogs.length });
+});
+
 /**
  * FIRECRAWL UTILITY: Deep-scrape business context for demos
  * Strategy: Map site → scrape key pages → feed raw markdown to agent
