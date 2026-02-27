@@ -255,8 +255,13 @@ app.post("/api/start-demo", async (req, res) => {
         });
 
         const scrapePromise = scrapeBusinessContext(websiteURL);
+        const slotsPromise = fetchGhlSlots(14); // Pre-fetch 14 days of slots
 
-        const [contactResponse, businessContext] = await Promise.all([contactPromise, scrapePromise]);
+        const [contactResponse, businessContext, availableSlots] = await Promise.all([
+            contactPromise,
+            scrapePromise,
+            slotsPromise
+        ]);
 
         let contactId = null;
         if (contactResponse.ok) {
@@ -295,6 +300,7 @@ app.post("/api/start-demo", async (req, res) => {
                     "contact_id": contactId || "",
                     "contact_company_name": companyName || "your business",
                     "business_context": businessContext,
+                    "available_slots": availableSlots.slice(0, 10).join(", "),
                     "current_date": new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" }),
                     "current_time": new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
                 }
@@ -393,6 +399,39 @@ const getGhlHeaders = (version = "2021-07-28") => ({
     Version: version,
     "Content-Type": "application/json"
 });
+
+/**
+ * Helper: Fetch slots from GHL
+ */
+const fetchGhlSlots = async (days = 7) => {
+    const calendarId = process.env.GHL_CALENDAR_ID;
+    const now = new Date();
+    const future = new Date(now.getTime() + (days * 24 * 60 * 60 * 1000));
+    const bufferTime = now.getTime() + (60 * 60 * 1000); // 1 hour buffer
+
+    addDebugLog(`📅 Fetching slots for calendar ${calendarId}...`);
+    const url = `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots?startDate=${now.getTime()}&endDate=${future.getTime()}`;
+
+    const response = await fetch(url, { headers: getGhlHeaders() });
+    const slotsData = await response.json();
+
+    if (!response.ok) {
+        addDebugLog(`❌ GHL Slots API Error: ${JSON.stringify(slotsData)}`);
+        return [];
+    }
+
+    let availableSlots = [];
+    Object.keys(slotsData).forEach(day => {
+        if (slotsData[day]?.slots) {
+            const daySlots = slotsData[day].slots;
+            const futureSlots = daySlots.filter(s => new Date(s).getTime() > bufferTime);
+            availableSlots.push(...futureSlots);
+        }
+    });
+
+    addDebugLog(`✅ Resolved ${availableSlots.length} future slots from GHL.`);
+    return availableSlots;
+};
 
 /**
  * Endpoint: Get Slots
@@ -536,51 +575,16 @@ app.post("/retell/check_availability", async (req, res) => {
     // Detailed logging for phone resolution debugging
     addDebugLog(`📞 Session context: contact_id=${contactIdFromSession}, phone=${phone}, email=${email}`);
 
-    const calendarId = process.env.GHL_CALENDAR_ID;
-    const now = new Date();
-
-    addDebugLog(`Availability requested for Phone: ${phone}, Email: ${email}`);
-
     try {
-        // 1. Fetch free slots (7-day window)
-        const sevenDays = new Date(now.getTime() + (7 * 24 * 60 * 60 * 1000));
-        const slotsUrl = `https://services.leadconnectorhq.com/calendars/${calendarId}/free-slots?startDate=${now.getTime()}&endDate=${sevenDays.getTime()}`;
-        const slotsRes = await fetch(slotsUrl, { headers: getGhlHeaders() });
-        const slotsData = await slotsRes.json();
-
-        addDebugLog(`Raw GHL Slots Days: ${Object.keys(slotsData).join(", ")}`);
-
-        let availableSlots = [];
-        const bufferTime = now.getTime() + (60 * 60 * 1000); // 1 hour buffer
-        addDebugLog(`Current Server Time: ${now.toISOString()} (${now.getTime()})`);
-        addDebugLog(`Buffer Time (now+1h): ${new Date(bufferTime).toISOString()} (${bufferTime})`);
-
-        Object.keys(slotsData).forEach(day => {
-            if (slotsData[day]?.slots) {
-                const daySlots = slotsData[day].slots;
-                const futureSlots = daySlots.filter(s => {
-                    const slotTime = new Date(s).getTime();
-                    const isFuture = slotTime > bufferTime;
-                    if (!isFuture && daySlots.length < 50) { // Log filtered slots if not too many
-                        addDebugLog(`   Filtering out past/near slot: ${s} (slotTime: ${slotTime}, buffer: ${bufferTime})`);
-                    }
-                    return isFuture;
-                });
-                addDebugLog(`Day ${day}: ${daySlots.length} total, ${futureSlots.length} future`);
-                availableSlots.push(...futureSlots);
-            } else if (day !== 'traceId') {
-                addDebugLog(`⚠️ Day ${day} has no slots property: ${JSON.stringify(slotsData[day])}`);
-            }
-        });
-
-        addDebugLog(`Found ${availableSlots.length} available slots`);
+        // 1. Fetch free slots using helper
+        const availableSlots = await fetchGhlSlots(7);
 
         // 2. Quick check for existing appointments (single contact lookup, no mega scan)
         let existingAppointments = [];
         let contactName = null;
-
         let contact = null;
-        if (contactIdFromSession) {
+
+        if (contactIdFromSession && contactIdFromSession !== "{{contact_id}}") {
             const cRes = await fetch(`https://services.leadconnectorhq.com/contacts/${contactIdFromSession}`, { headers: getGhlHeaders() });
             if (cRes.ok) {
                 const cData = await cRes.json();
