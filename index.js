@@ -300,7 +300,7 @@ app.post("/api/start-demo", async (req, res) => {
                     "contact_id": contactId || "",
                     "contact_company_name": companyName || "your business",
                     "business_context": businessContext,
-                    "available_slots": availableSlots.slice(0, 10).join(", "),
+                    "available_slots": formatSlotsForPrompt(availableSlots),
                     "current_date": new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" }),
                     "current_time": new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
                 }
@@ -431,6 +431,27 @@ const fetchGhlSlots = async (days = 7) => {
 
     addDebugLog(`✅ Resolved ${availableSlots.length} future slots from GHL.`);
     return availableSlots;
+};
+
+/**
+ * Helper: Format slots into human-readable text for the LLM
+ */
+const formatSlotsForPrompt = (slots) => {
+    if (!slots || slots.length === 0) return "No slots currently available.";
+
+    // Group slots by day
+    const days = {};
+    slots.slice(0, 15).forEach(s => {
+        const date = new Date(s);
+        const dayStr = date.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", timeZone: "America/New_York" });
+        const timeStr = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" });
+        if (!days[dayStr]) days[dayStr] = [];
+        days[dayStr].push(timeStr);
+    });
+
+    return Object.entries(days)
+        .map(([day, times]) => `${day}: ${times.join(", ")}`)
+        .join("; ");
 };
 
 /**
@@ -622,8 +643,9 @@ app.post("/retell/check_availability", async (req, res) => {
             addDebugLog(`❌ No contact found for phone=${phone}, email=${email}`);
         }
         const responsePayload = {
-            available_slots: availableSlots.slice(0, 8), // Offer more slots
-            slots: availableSlots.slice(0, 8),          // Alias for compatibility
+            available_slots: availableSlots.slice(0, 8),
+            slots: availableSlots.slice(0, 8),
+            formatted_slots: formatSlotsForPrompt(availableSlots),
             existing_appointments: existingAppointments,
             contact_name: contactName,
             current_date: new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" }),
