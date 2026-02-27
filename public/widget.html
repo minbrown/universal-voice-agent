@@ -233,6 +233,11 @@
             <button id="end-btn" class="btn"
                 style="background: rgba(255,255,255,0.1); color: white; border: 1px solid var(--border);">End
                 Demo</button>
+
+            <a id="booking-link" href="https://api.leadconnectorhq.com/widget/booking/eIcR5W7U5pE9IQVXD1RW"
+                target="_blank">
+                Schedule Your Setup Call &rarr;
+            </a>
         </div>
 
 
@@ -280,6 +285,21 @@
 
                 // Start Call
                 await retellClient.startCall({ accessToken: data.access_token });
+
+                // Start polling for UI updates
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const res = await fetch(`/api/ui-update/${data.call_id}`);
+                        const uiData = await res.json();
+                        if (uiData.event === 'show_booking') {
+                            document.getElementById('booking-link').style.display = 'block';
+                            status.innerText = '✨ Booking link sent to your screen!';
+                        }
+                    } catch (e) { }
+                }, 2000);
+
+                // Stop polling on end
+                retellClient.on('call_ended', () => clearInterval(pollInterval));
 
                 // UI Switch
                 form.classList.add('hidden');

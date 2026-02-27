@@ -102,6 +102,33 @@ app.get("/api/debug", (req, res) => {
 });
 
 /**
+ * CUSTOM SERVER EVENT: Allow the LLM to trigger UI changes
+ */
+let uiEvents = {}; // Simple in-memory event store (for demo purposes)
+
+app.post("/retell/show-booking-link", (req, res) => {
+    const { call } = req.body;
+    const callId = call?.call_id;
+    if (callId) {
+        addDebugLog(`📱 Triggering UI Booking Link for call: ${callId}`);
+        uiEvents[callId] = 'show_booking';
+        res.json({ status: "success", message: "UI update triggered" });
+    } else {
+        res.status(400).json({ error: "Missing call_id" });
+    }
+});
+
+app.get("/api/ui-update/:callId", (req, res) => {
+    const { callId } = req.params;
+    const event = uiEvents[callId];
+    if (event) {
+        delete uiEvents[callId]; // Consume event
+        return res.json({ event });
+    }
+    res.json({ event: null });
+});
+
+/**
  * FIRECRAWL UTILITY: Deep-scrape business context for demos
  * Strategy: Map site → scrape key pages → feed raw markdown to agent
  */
