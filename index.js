@@ -141,8 +141,9 @@ app.post("/retell/search-business-info", async (req, res) => {
                 query: `${query} site:${website_url}`,
                 limit: 3,
                 scrapeOptions: {
-                    onlyMainContent: true,
-                    formats: ["markdown"]
+                    onlyMainContent: false, // Don't strip React UI
+                    formats: ["markdown"],
+                    waitFor: 8000 // Give React 8 seconds to mount before scraping search result
                 }
             })
         });
@@ -200,7 +201,7 @@ const scrapeBusinessContext = async (url) => {
                 url: baseUrl,
                 formats: ["markdown"],
                 onlyMainContent: false,
-                waitFor: 3000 // Critical: Wait for React/Vite to render the UI
+                waitFor: 8000 // Critical: Wait 8 full seconds for heavy React/Vite SPAs to mount
             })
         }).then(r => r.ok ? r.json() : null).catch(() => null);
 
@@ -265,7 +266,7 @@ const scrapeBusinessContext = async (url) => {
                     url: pageUrl,
                     formats: ["markdown"],
                     onlyMainContent: false,
-                    waitFor: 3000 // Give React time to render
+                    waitFor: 8000 // Wait 8 seconds for JS to render
                 })
             }).then(r => r.ok ? r.json() : null).catch(() => null);
         });
