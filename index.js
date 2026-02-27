@@ -118,6 +118,49 @@ app.post("/retell/show-booking-link", (req, res) => {
     }
 });
 
+/**
+ * RETELL TOOL: Real-time search for business details
+ * AI calls this to find pricing, specs, or policies not in the initial scrape.
+ */
+app.post("/retell/search-business-info", async (req, res) => {
+    const { query, website_url } = req.body;
+    addDebugLog(`🔍 AI Tool: Searching "${query}" on ${website_url}`);
+
+    if (!website_url || !query) {
+        return res.json({ response: "I need both a search query and the website URL to find that information." });
+    }
+
+    try {
+        const response = await fetch("https://api.firecrawl.dev/v1/search", {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${process.env.FIRECRAWL_API_KEY}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                query: `${query} site:${website_url}`,
+                limit: 3,
+                scrapeOptions: {
+                    onlyMainContent: true,
+                    formats: ["markdown"]
+                }
+            })
+        });
+
+        if (!response.ok) throw new Error(`Firecrawl Search Error: ${response.status}`);
+        const data = await response.json();
+
+        const insights = (data.data || []).map(item =>
+            `=== URL: ${item.url} ===\n${(item.markdown || "").substring(0, 4000)}`
+        ).join("\n\n");
+
+        res.json({ response: insights || "I searched the site but couldn't find a direct answer to that specific query." });
+    } catch (err) {
+        addDebugLog(`❌ Tool Search Failed: ${err.message}`);
+        res.json({ response: "I'm having a little trouble searching the live site right now. I'll check my other records." });
+    }
+});
+
 app.get("/api/ui-update/:callId", (req, res) => {
     const { callId } = req.params;
     const event = uiEvents[callId];
@@ -318,6 +361,7 @@ app.post("/api/start-demo", async (req, res) => {
                     "contact_id": contactId || "",
                     "contact_company_name": companyName || "your business",
                     "business_context": businessContext,
+                    "website_url": websiteURL,
                     "available_slots": formatSlotsForPrompt(availableSlots),
                     "current_date": new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" }),
                     "current_time": new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
