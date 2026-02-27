@@ -134,7 +134,7 @@ app.get("/api/ui-update/:callId", (req, res) => {
  */
 const scrapeBusinessContext = async (url) => {
     if (!url) return "General business information";
-    addDebugLog(`🔥 Intelligent scraping triggered for: ${url}`);
+    addDebugLog(`🔥 High-Intensity Scraping: ${url}`);
 
     const fcHeaders = {
         "Authorization": `Bearer ${process.env.FIRECRAWL_API_KEY}`,
@@ -148,75 +148,97 @@ const scrapeBusinessContext = async (url) => {
             baseUrl = `${parsed.protocol}//${parsed.host}/`;
         } catch (e) { }
 
-        // Step 1: Broad mapping to discover the site structure (Limit 100)
-        addDebugLog(`🗺️ Mapping site structure: ${baseUrl}`);
-        const mapRes = await fetch("https://api.firecrawl.dev/v1/map", {
+        // STAGE 1: Parallel Homepage Scrape + Site Mapping
+        addDebugLog(`🛡️ Stage 1: Primary mapping & Homepage extraction...`);
+        const homepagePromise = fetch("https://api.firecrawl.dev/v1/scrape", {
+            method: "POST",
+            headers: fcHeaders,
+            body: JSON.stringify({ url: baseUrl, formats: ["markdown"], onlyMainContent: false })
+        }).then(r => r.ok ? r.json() : null).catch(() => null);
+
+        const mapPromise = fetch("https://api.firecrawl.dev/v1/map", {
             method: "POST",
             headers: fcHeaders,
             body: JSON.stringify({ url: baseUrl, limit: 100 })
-        });
-        const mapData = mapRes.ok ? await mapRes.json() : null;
+        }).then(r => r.ok ? r.json() : null).catch(() => null);
 
-        // Step 2: Extracting links
+        const [homepageResult, mapData] = await Promise.all([homepagePromise, mapPromise]);
 
-        const allLinks = (mapData?.links || []).map(l => typeof l === 'string' ? l : l.url).filter(Boolean);
+        // STAGE 2: Link Discovery & Intelligent Clustering
+        let allLinks = new Set((mapData?.links || []).map(l => typeof l === 'string' ? l : l.url).filter(Boolean));
 
-        // Step 2: Intelligent Clustering - Pick from each key category
+        // Manual extraction from homepage (Fallback if map failed)
+        if (homepageResult?.data?.markdown) {
+            const md = homepageResult.data.markdown;
+            const linkRegex = /\[.*?\]\((https?:\/\/.*?|(\/.*?))\)/g;
+            let match;
+            while ((match = linkRegex.exec(md)) !== null) {
+                let link = match[1];
+                if (link.startsWith("/")) {
+                    link = new URL(link, baseUrl).href;
+                }
+                if (link.startsWith(baseUrl)) {
+                    allLinks.add(link);
+                }
+            }
+        }
+
+        const discoveredLinks = Array.from(allLinks);
+        addDebugLog(`🛰️ Found ${discoveredLinks.length} unique internal links.`);
+
         const clusters = {
-            pricing: ["pricing", "price", "rates", "fees", "membership", "packages", "cost", "investment"],
-            services: ["service", "treatment", "procedure", "menu", "capabilities", "what-we-do"],
-            about: ["about", "team", "staff", "who-we-are", "history", "story"],
+            pricing: ["pricing", "price", "rates", "fees", "membership", "packages", "cost", "investment", "plan"],
+            services: ["service", "treatment", "procedure", "menu", "capabilities", "what-we-do", "product"],
+            about: ["about", "team", "staff", "who-we-are", "history", "story", "founder"],
             contact: ["contact", "location", "find-us", "hours", "appointment", "book", "visit"]
         };
 
-        const targetLinks = new Set([baseUrl, url]);
-        Object.values(clusters).forEach(patterns => {
-            const matches = allLinks.filter(link =>
-                patterns.some(p => link.toLowerCase().includes(p)) &&
-                !targetLinks.has(link)
+        const pagesToScrape = new Set([baseUrl, url]);
+        // Prioritized selection: Pricing and Services first!
+        ["pricing", "services", "about", "contact"].forEach(cat => {
+            const matches = discoveredLinks.filter(link =>
+                clusters[cat].some(p => link.toLowerCase().includes(p)) &&
+                !pagesToScrape.has(link)
             );
-            matches.slice(0, 2).forEach(m => targetLinks.add(m));
+            matches.slice(0, 2).forEach(m => pagesToScrape.add(m));
         });
 
-        const pagesToScrape = Array.from(targetLinks).slice(0, 10);
-        addDebugLog(`📄 Scraping prioritized list (${pagesToScrape.length} pages): ${pagesToScrape.join(", ")}`);
+        // Fill up to 6 high-value pages
+        const finalQueue = Array.from(pagesToScrape).slice(0, 7);
+        addDebugLog(`📄 Final Priority Queue: ${finalQueue.join(", ")}`);
 
-        // Step 3: Parallel High-Fidelity Scrape (Keep footers for location/hours)
-        const scrapePromises = pagesToScrape.map(pageUrl =>
-            fetch("https://api.firecrawl.dev/v1/scrape", {
+        // STAGE 3: High-Fidelity Deep Scrape
+        const subpagePromises = finalQueue.map(pageUrl => {
+            if (pageUrl === baseUrl && homepageResult) return Promise.resolve(homepageResult);
+            return fetch("https://api.firecrawl.dev/v1/scrape", {
                 method: "POST",
                 headers: fcHeaders,
-                body: JSON.stringify({
-                    url: pageUrl,
-                    formats: ["markdown"],
-                    onlyMainContent: false // Critical: catch hours/locations in footers
-                })
-            }).then(r => r.ok ? r.json() : null).catch(() => null)
-        );
+                body: JSON.stringify({ url: pageUrl, formats: ["markdown"], onlyMainContent: false })
+            }).then(r => r.ok ? r.json() : null).catch(() => null);
+        });
 
-        const results = await Promise.all(scrapePromises);
+        const results = await Promise.all(subpagePromises);
 
         let combinedParts = [];
         results.filter(Boolean).forEach((result, i) => {
             if (result?.data?.markdown) {
-                const title = result.data.metadata?.title || (i === 0 ? "Home" : "Info");
-                const content = result.data.markdown.substring(0, 10000);
-                combinedParts.push(`\n\n=== SOURCE: ${title} (${pagesToScrape[i]}) ===\n${content}`);
+                const title = result.data.metadata?.title || `Source ${i + 1}`;
+                const content = result.data.markdown.substring(0, 7000); // 7k per page for better density
+                combinedParts.push(`\n\n=== [${title}] URL: ${finalQueue[i]} ===\n${content}`);
             }
         });
 
         let finalContent = combinedParts.join("");
-        if (!finalContent.trim()) {
-            addDebugLog("⚠️ Intelligent scrape returned no content.");
-            return "General business excellence and high-quality service.";
-        }
+        if (!finalContent.trim()) return "General business information.";
 
-        addDebugLog(`✅ Deep context extracted (${finalContent.length} chars from ${pagesToScrape.length} pages)`);
-        return finalContent.substring(0, 40000);
+        // Keep it to 25k chars - Retell's sweet spot for dynamic variables
+        const optimizedLimit = 25000;
+        addDebugLog(`✅ Context Generated: ${finalContent.length} chars. Slicing to ${optimizedLimit}.`);
+        return finalContent.substring(0, optimizedLimit);
 
     } catch (err) {
-        addDebugLog(`⚠️ Deep scraping failed for ${url}: ${err.message}`);
-        return "General business excellence and high-quality service.";
+        addDebugLog(`❌ Critical Scrape Error: ${err.message}`);
+        return "Business details currently loading. Focus on general high-quality service.";
     }
 };
 
