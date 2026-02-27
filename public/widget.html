@@ -286,21 +286,6 @@
                 // Start Call
                 await retellClient.startCall({ accessToken: data.access_token });
 
-                // Start polling for UI updates
-                const pollInterval = setInterval(async () => {
-                    try {
-                        const res = await fetch(`/api/ui-update/${data.call_id}`);
-                        const uiData = await res.json();
-                        if (uiData.event === 'show_booking') {
-                            document.getElementById('booking-link').style.display = 'block';
-                            status.innerText = '✨ Booking link sent to your screen!';
-                        }
-                    } catch (e) { }
-                }, 2000);
-
-                // Stop polling on end
-                retellClient.on('call_ended', () => clearInterval(pollInterval));
-
                 // UI Switch
                 form.classList.add('hidden');
                 active.classList.remove('hidden');
