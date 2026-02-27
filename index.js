@@ -134,7 +134,7 @@ app.get("/api/ui-update/:callId", (req, res) => {
  */
 const scrapeBusinessContext = async (url) => {
     if (!url) return "General business information";
-    addDebugLog(`🔥 Deep-scraping website: ${url}`);
+    addDebugLog(`🔥 Intelligent scraping triggered for: ${url}`);
 
     const fcHeaders = {
         "Authorization": `Bearer ${process.env.FIRECRAWL_API_KEY}`,
@@ -142,108 +142,77 @@ const scrapeBusinessContext = async (url) => {
     };
 
     try {
-        // Resolve base URL to ensure we get the primary business context
         let baseUrl = url;
         try {
             const parsed = new URL(url);
             baseUrl = `${parsed.protocol}//${parsed.host}/`;
         } catch (e) { }
 
-        // Step 1: Start homepage and provided page scrape in parallel (~2s)
-        addDebugLog(`📄 Scraping ${url} and base domain ${baseUrl} in parallel...`);
-        const homepagePromise = fetch("https://api.firecrawl.dev/v1/scrape", {
+        // Step 1: Broad mapping to discover the site structure (Limit 100)
+        addDebugLog(`🗺️ Mapping site structure: ${baseUrl}`);
+        const mapRes = await fetch("https://api.firecrawl.dev/v1/map", {
             method: "POST",
             headers: fcHeaders,
-            body: JSON.stringify({
-                url: baseUrl,
-                formats: ["markdown"],
-                onlyMainContent: true
-            })
-        }).then(r => r.ok ? r.json() : null).catch(() => null);
+            body: JSON.stringify({ url: baseUrl, limit: 100 })
+        });
+        const mapData = mapRes.ok ? await mapRes.json() : null;
 
-        const targetPagePromise = url !== baseUrl ? fetch("https://api.firecrawl.dev/v1/scrape", {
-            method: "POST",
-            headers: fcHeaders,
-            body: JSON.stringify({
-                url: url,
-                formats: ["markdown"],
-                onlyMainContent: true
-            })
-        }).then(r => r.ok ? r.json() : null).catch(() => null) : Promise.resolve(null);
+        // Step 2: Extracting links
 
-        // Step 2: Map site to discover pages (Parallel with scrapes)
-        const mapPromise = fetch("https://api.firecrawl.dev/v1/map", {
-            method: "POST",
-            headers: fcHeaders,
-            body: JSON.stringify({ url: baseUrl, limit: 50 }) // Increased discovery limit
-        }).then(r => r.ok ? r.json() : null).catch(() => null);
+        const allLinks = (mapData?.links || []).map(l => typeof l === 'string' ? l : l.url).filter(Boolean);
 
-        // Wait for primary scrapes and map to finish
-        const [homepageResult, targetPageResult, mapData] = await Promise.all([
-            homepagePromise,
-            targetPagePromise,
-            mapPromise
-        ]);
+        // Step 2: Intelligent Clustering - Pick from each key category
+        const clusters = {
+            pricing: ["pricing", "price", "rates", "fees", "membership", "packages", "cost", "investment"],
+            services: ["service", "treatment", "procedure", "menu", "capabilities", "what-we-do"],
+            about: ["about", "team", "staff", "who-we-are", "history", "story"],
+            contact: ["contact", "location", "find-us", "hours", "appointment", "book", "visit"]
+        };
 
-        let pagesToScrape = [];
-        if (mapData?.links) {
-            const allLinks = (mapData.links || []).map(l => typeof l === 'string' ? l : l.url).filter(Boolean);
-            const keyPatterns = /about|contact|service|pricing|price|menu|team|staff|hour|location|faq|policy|policies|appointment|book|info|treatment|membership/i;
-            pagesToScrape = allLinks.filter(link =>
-                keyPatterns.test(link) &&
-                link !== baseUrl &&
-                link !== url
-            ).slice(0, 5); // Increased subpage count to 5
-        }
-
-        // Step 3: Scrape subpages in parallel IF we have them
-        let subpageResults = [];
-        if (pagesToScrape.length > 0) {
-            addDebugLog(`📄 Scraping additional pages: ${pagesToScrape.join(", ")}`);
-            const subpagePromises = pagesToScrape.map(pageUrl =>
-                fetch("https://api.firecrawl.dev/v1/scrape", {
-                    method: "POST",
-                    headers: fcHeaders,
-                    body: JSON.stringify({
-                        url: pageUrl,
-                        formats: ["markdown"],
-                        onlyMainContent: true
-                    })
-                }).then(r => r.ok ? r.json() : null).catch(() => null)
+        const targetLinks = new Set([baseUrl, url]);
+        Object.values(clusters).forEach(patterns => {
+            const matches = allLinks.filter(link =>
+                patterns.some(p => link.toLowerCase().includes(p)) &&
+                !targetLinks.has(link)
             );
-            subpageResults = await Promise.all(subpagePromises);
-        }
+            matches.slice(0, 2).forEach(m => targetLinks.add(m));
+        });
 
-        // Combine all markdown content safely
-        const allResults = [homepageResult, targetPageResult, ...subpageResults].filter(Boolean);
+        const pagesToScrape = Array.from(targetLinks).slice(0, 10);
+        addDebugLog(`📄 Scraping prioritized list (${pagesToScrape.length} pages): ${pagesToScrape.join(", ")}`);
+
+        // Step 3: Parallel High-Fidelity Scrape (Keep footers for location/hours)
+        const scrapePromises = pagesToScrape.map(pageUrl =>
+            fetch("https://api.firecrawl.dev/v1/scrape", {
+                method: "POST",
+                headers: fcHeaders,
+                body: JSON.stringify({
+                    url: pageUrl,
+                    formats: ["markdown"],
+                    onlyMainContent: false // Critical: catch hours/locations in footers
+                })
+            }).then(r => r.ok ? r.json() : null).catch(() => null)
+        );
+
+        const results = await Promise.all(scrapePromises);
+
         let combinedParts = [];
-        for (let i = 0; i < allResults.length; i++) {
-            const result = allResults[i];
+        results.filter(Boolean).forEach((result, i) => {
             if (result?.data?.markdown) {
-                const pageTitle = result.data.metadata?.title || (i === 0 ? "Home" : i === 1 && url !== baseUrl ? "Target" : "Subpage");
-                // Avoid complex regex on untrusted/large strings
-                const md = result.data.markdown;
-                const cartIndex = md.indexOf("### Shopping Cart");
-                let cleaned = md;
-                if (cartIndex !== -1) {
-                    const checkoutIndex = md.indexOf("Checkout", cartIndex);
-                    if (checkoutIndex !== -1) {
-                        cleaned = md.substring(0, cartIndex) + md.substring(checkoutIndex + 8);
-                    }
-                }
-                combinedParts.push(`\n\n=== PAGE: ${pageTitle} ===\n${cleaned.substring(0, 10000)}`);
+                const title = result.data.metadata?.title || (i === 0 ? "Home" : "Info");
+                const content = result.data.markdown.substring(0, 10000);
+                combinedParts.push(`\n\n=== SOURCE: ${title} (${pagesToScrape[i]}) ===\n${content}`);
             }
-        }
-        let combinedContent = combinedParts.join("");
+        });
 
-        if (!combinedContent.trim()) {
-            addDebugLog("⚠️ No content extracted from any page");
+        let finalContent = combinedParts.join("");
+        if (!finalContent.trim()) {
+            addDebugLog("⚠️ Intelligent scrape returned no content.");
             return "General business excellence and high-quality service.";
         }
 
-        const trimmed = combinedContent.substring(0, 20000);
-        addDebugLog(`✅ Business context extracted (${trimmed.length} chars from ${pagesToScrape.length} pages)`);
-        return trimmed;
+        addDebugLog(`✅ Deep context extracted (${finalContent.length} chars from ${pagesToScrape.length} pages)`);
+        return finalContent.substring(0, 40000);
 
     } catch (err) {
         addDebugLog(`⚠️ Deep scraping failed for ${url}: ${err.message}`);
