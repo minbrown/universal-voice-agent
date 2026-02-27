@@ -175,7 +175,7 @@ const scrapeBusinessContext = async (url) => {
         const mapPromise = fetch("https://api.firecrawl.dev/v1/map", {
             method: "POST",
             headers: fcHeaders,
-            body: JSON.stringify({ url: baseUrl, limit: 10 })
+            body: JSON.stringify({ url: baseUrl, limit: 50 }) // Increased discovery limit
         }).then(r => r.ok ? r.json() : null).catch(() => null);
 
         // Wait for primary scrapes and map to finish
@@ -188,12 +188,12 @@ const scrapeBusinessContext = async (url) => {
         let pagesToScrape = [];
         if (mapData?.links) {
             const allLinks = (mapData.links || []).map(l => typeof l === 'string' ? l : l.url).filter(Boolean);
-            const keyPatterns = /about|contact|service|pricing|price|menu|team|staff|hour|location|faq|policy|policies|appointment|book|info/i;
+            const keyPatterns = /about|contact|service|pricing|price|menu|team|staff|hour|location|faq|policy|policies|appointment|book|info|treatment|membership/i;
             pagesToScrape = allLinks.filter(link =>
                 keyPatterns.test(link) &&
                 link !== baseUrl &&
                 link !== url
-            ).slice(0, 2);
+            ).slice(0, 5); // Increased subpage count to 5
         }
 
         // Step 3: Scrape subpages in parallel IF we have them
