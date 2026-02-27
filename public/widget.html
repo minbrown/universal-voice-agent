@@ -8,13 +8,19 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
-            --bg: #0a0a0a;
-            --card: #141414;
-            --accent: #ffffff;
-            --text: #ffffff;
-            --muted: #888888;
-            --border: rgba(255, 255, 255, 0.1);
-            --success: #00ff88;
+            --bg: #f5f6fa;
+            --card: #ffffff;
+            --accent: #8799C5;
+            /* Re-engineered from user's GHL code */
+            --accent-hover: #7284b0;
+            --accent-alt: #d16b22;
+            /* Signature dark orange from user's GHL code "--color-6823bc6ccb75661e9d97c76d" */
+            --text: #1D242C;
+            /* Main headline text from user's code */
+            --muted: #667085;
+            --border: #e2e8f0;
+            --input-bg: #f8fafc;
+            --success: #37ca37;
         }
 
         * {
@@ -39,9 +45,10 @@
             max-width: 450px;
             background: var(--card);
             border: 1px solid var(--border);
-            border-radius: 32px;
+            border-radius: 28px;
             padding: 40px;
-            box-shadow: 0 40px 100px rgba(0, 0, 0, 0.8);
+            box-shadow: 0 20px 50px rgba(29, 36, 44, 0.08);
+            /* Soft elegant shadow */
             text-align: center;
             position: relative;
         }
@@ -49,27 +56,28 @@
         .voice-orb {
             width: 80px;
             height: 80px;
-            background: radial-gradient(circle, #ffffff 0%, rgba(255, 255, 255, 0) 70%);
+            background: radial-gradient(circle, var(--accent) 0%, rgba(135, 153, 197, 0) 70%);
             border-radius: 50%;
             margin: 0 auto 24px;
             transition: 0.5s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 0 40px rgba(255, 255, 255, 0.1);
+            box-shadow: 0 0 30px rgba(135, 153, 197, 0.2);
             display: none;
-            /* Only show in demo mode */
         }
 
         .voice-orb.active {
             display: block;
             animation: pulse 1.5s infinite ease-in-out;
-            background: radial-gradient(circle, #00ff88 0%, rgba(0, 255, 136, 0) 70%);
-            box-shadow: 0 0 60px rgba(0, 255, 136, 0.3);
+            background: radial-gradient(circle, var(--accent) 0%, rgba(135, 153, 197, 0) 70%);
+            box-shadow: 0 0 50px rgba(135, 153, 197, 0.4);
         }
 
         h1 {
             font-size: 28px;
             font-weight: 700;
             margin-bottom: 8px;
-            letter-spacing: -1px;
+            letter-spacing: -0.5px;
+            color: #565A7C;
+            /* Darker indigo for headlines */
         }
 
         p.subtitle {
@@ -90,16 +98,16 @@
             letter-spacing: 1px;
             color: var(--muted);
             margin-bottom: 6px;
-            font-weight: 600;
+            font-weight: 700;
         }
 
         input {
             width: 100%;
             padding: 12px 16px;
-            background: rgba(255, 255, 255, 0.05);
+            background: var(--input-bg);
             border: 1px solid var(--border);
             border-radius: 12px;
-            color: white;
+            color: var(--text);
             font-size: 14px;
             font-family: inherit;
             transition: 0.2s;
@@ -108,14 +116,21 @@
         input:focus {
             outline: none;
             border-color: var(--accent);
-            background: rgba(255, 255, 255, 0.08);
+            background: #ffffff;
+            box-shadow: 0 0 0 4px rgba(135, 153, 197, 0.15);
+        }
+
+        /* Override autofill styling for light mode */
+        input:-webkit-autofill {
+            -webkit-box-shadow: 0 0 0 30px var(--input-bg) inset !important;
+            -webkit-text-fill-color: var(--text) !important;
         }
 
         .btn {
             width: 100%;
             padding: 16px;
             background: var(--accent);
-            color: black;
+            color: white;
             border: none;
             border-radius: 14px;
             font-weight: 700;
@@ -127,44 +142,49 @@
 
         .btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(255, 255, 255, 0.1);
+            background: var(--accent-hover);
+            box-shadow: 0 10px 20px rgba(135, 153, 197, 0.2);
         }
 
         .btn:disabled {
-            opacity: 0.3;
+            opacity: 0.5;
             cursor: not-allowed;
             transform: none;
+            background: var(--muted);
         }
 
         #booking-link {
             display: none;
             margin-top: 24px;
             padding: 16px;
-            background: rgba(0, 255, 136, 0.1);
-            border: 1px solid var(--success);
+            background: var(--accent-alt);
+            border: none;
             border-radius: 14px;
-            color: var(--success);
+            color: white;
             text-decoration: none;
             font-weight: 700;
             transition: 0.2s;
+            box-shadow: 0 10px 20px rgba(209, 107, 34, 0.2);
         }
 
         #booking-link:hover {
-            background: rgba(0, 255, 136, 0.2);
-            transform: scale(1.02);
+            transform: translateY(-2px);
+            box-shadow: 0 14px 24px rgba(209, 107, 34, 0.3);
+            filter: brightness(1.05);
         }
 
         #status {
-            font-size: 12px;
+            font-size: 13px;
             color: var(--muted);
-            margin-top: 16px;
+            margin-top: 20px;
             min-height: 18px;
+            font-weight: 500;
         }
 
         @keyframes pulse {
             0% {
                 transform: scale(1);
-                opacity: 0.8;
+                opacity: 0.7;
             }
 
             50% {
@@ -231,7 +251,7 @@
             <h1 id="demo-title">Speaking to your agent...</h1>
             <p id="demo-desc">The AI is using your website's data to represent your business.</p>
             <button id="end-btn" class="btn"
-                style="background: rgba(255,255,255,0.1); color: white; border: 1px solid var(--border);">End
+                style="background: #f1f5f9; color: var(--text); border: 1px solid var(--border);">End
                 Demo</button>
         </div>
 
