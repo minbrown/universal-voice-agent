@@ -1020,7 +1020,10 @@ app.post("/retell/update_contact_info", async (req, res) => {
 const keyPath = join(__dirname, "key.pem");
 const certPath = join(__dirname, "cert.pem");
 
-if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+// VERCEL COMPATIBILITY: Do not start a listener if running on Vercel (managed by Serverless Functions)
+if (process.env.VERCEL) {
+    console.log("🚀 Running on Vercel Serverless environment.");
+} else if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
     const options = {
         key: fs.readFileSync(keyPath),
         cert: fs.readFileSync(certPath),
@@ -1035,3 +1038,5 @@ if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
         console.log(`📁 Serving files from: ${join(__dirname, "public")}`);
     });
 }
+
+export default app;
