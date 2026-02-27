@@ -196,7 +196,12 @@ const scrapeBusinessContext = async (url) => {
         const homepagePromise = fetch("https://api.firecrawl.dev/v1/scrape", {
             method: "POST",
             headers: fcHeaders,
-            body: JSON.stringify({ url: baseUrl, formats: ["markdown"], onlyMainContent: false })
+            body: JSON.stringify({
+                url: baseUrl,
+                formats: ["markdown"],
+                onlyMainContent: false,
+                waitFor: 3000 // Critical: Wait for React/Vite to render the UI
+            })
         }).then(r => r.ok ? r.json() : null).catch(() => null);
 
         const mapPromise = fetch("https://api.firecrawl.dev/v1/map", {
@@ -256,7 +261,12 @@ const scrapeBusinessContext = async (url) => {
             return fetch("https://api.firecrawl.dev/v1/scrape", {
                 method: "POST",
                 headers: fcHeaders,
-                body: JSON.stringify({ url: pageUrl, formats: ["markdown"], onlyMainContent: false })
+                body: JSON.stringify({
+                    url: pageUrl,
+                    formats: ["markdown"],
+                    onlyMainContent: false,
+                    waitFor: 3000 // Give React time to render
+                })
             }).then(r => r.ok ? r.json() : null).catch(() => null);
         });
 
