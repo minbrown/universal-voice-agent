@@ -1,9 +1,11 @@
 import express from "express";
 import cors from "cors";
-import fetch from "node-fetch";
+// Native fetch used (Node 22+)
 import "dotenv/config";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import https from "https";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -14,20 +16,16 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-const debugLogs = [];
 const addDebugLog = (msg) => {
-    const entry = `[${new Date().toLocaleTimeString()}] ${msg}`;
-    console.log(entry);
-    debugLogs.unshift(entry);
-    if (debugLogs.length > 50) debugLogs.pop();
+    console.log(`[${new Date().toLocaleTimeString()}] ${msg}`);
 };
 
 // Log all requests
 app.use((req, res, next) => {
     if (req.url.startsWith("/retell/")) {
-        addDebugLog(`${req.method} ${req.url} | Body: ${JSON.stringify(req.body)}`);
+        console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url} | Body: ${JSON.stringify(req.body)}`);
     } else {
-        addDebugLog(`${req.method} ${req.url}`);
+        console.log(`[${new Date().toLocaleTimeString()}] ${req.method} ${req.url}`);
     }
     next();
 });
@@ -100,7 +98,7 @@ app.get("/", (req, res) => {
 });
 
 app.get("/api/debug", (req, res) => {
-    res.json({ logs: debugLogs, count: debugLogs.length });
+    res.json({ logs: [], count: 0 });
 });
 
 /**
@@ -117,61 +115,106 @@ const scrapeBusinessContext = async (url) => {
     };
 
     try {
-        // Step 1: Map site to discover pages (~700ms)
-        let pagesToScrape = [url];
+        // Resolve base URL to ensure we get the primary business context
+        let baseUrl = url;
         try {
-            addDebugLog("📍 Mapping site structure...");
-            const mapRes = await fetch("https://api.firecrawl.dev/v1/map", {
-                method: "POST",
-                headers: fcHeaders,
-                body: JSON.stringify({ url, limit: 20 })
-            });
-            if (mapRes.ok) {
-                const mapData = await mapRes.json();
-                const allLinks = (mapData.links || []).map(l => typeof l === 'string' ? l : l.url).filter(Boolean);
-                const keyPatterns = /about|contact|service|pricing|price|menu|team|staff|hour|location|faq|policy|policies/i;
-                const keyPages = allLinks.filter(link => keyPatterns.test(link));
-                pagesToScrape = [...new Set([url, ...keyPages.slice(0, 3)])];
-                addDebugLog(`Found ${allLinks.length} pages, scraping ${pagesToScrape.length} key pages`);
-            }
-        } catch (mapErr) {
-            addDebugLog(`⚠️ Map failed, scraping homepage only: ${mapErr.message}`);
+            const parsed = new URL(url);
+            baseUrl = `${parsed.protocol}//${parsed.host}/`;
+        } catch (e) { }
+
+        // Step 1: Start homepage and provided page scrape in parallel (~2s)
+        addDebugLog(`📄 Scraping ${url} and base domain ${baseUrl} in parallel...`);
+        const homepagePromise = fetch("https://api.firecrawl.dev/v1/scrape", {
+            method: "POST",
+            headers: fcHeaders,
+            body: JSON.stringify({
+                url: baseUrl,
+                formats: ["markdown"],
+                onlyMainContent: true
+            })
+        }).then(r => r.ok ? r.json() : null).catch(() => null);
+
+        const targetPagePromise = url !== baseUrl ? fetch("https://api.firecrawl.dev/v1/scrape", {
+            method: "POST",
+            headers: fcHeaders,
+            body: JSON.stringify({
+                url: url,
+                formats: ["markdown"],
+                onlyMainContent: true
+            })
+        }).then(r => r.ok ? r.json() : null).catch(() => null) : Promise.resolve(null);
+
+        // Step 2: Map site to discover pages (Parallel with scrapes)
+        const mapPromise = fetch("https://api.firecrawl.dev/v1/map", {
+            method: "POST",
+            headers: fcHeaders,
+            body: JSON.stringify({ url: baseUrl, limit: 10 })
+        }).then(r => r.ok ? r.json() : null).catch(() => null);
+
+        // Wait for primary scrapes and map to finish
+        const [homepageResult, targetPageResult, mapData] = await Promise.all([
+            homepagePromise,
+            targetPagePromise,
+            mapPromise
+        ]);
+
+        let pagesToScrape = [];
+        if (mapData?.links) {
+            const allLinks = (mapData.links || []).map(l => typeof l === 'string' ? l : l.url).filter(Boolean);
+            const keyPatterns = /about|contact|service|pricing|price|menu|team|staff|hour|location|faq|policy|policies|appointment|book|info/i;
+            pagesToScrape = allLinks.filter(link =>
+                keyPatterns.test(link) &&
+                link !== baseUrl &&
+                link !== url
+            ).slice(0, 2);
         }
 
-        // Step 2: Scrape key pages in parallel (markdown is more reliable than JSON)
-        addDebugLog("📄 Scraping key pages...");
-        const scrapePromises = pagesToScrape.map(pageUrl =>
-            fetch("https://api.firecrawl.dev/v1/scrape", {
-                method: "POST",
-                headers: fcHeaders,
-                body: JSON.stringify({
-                    url: pageUrl,
-                    formats: ["markdown"],
-                    onlyMainContent: true
-                })
-            }).then(r => r.ok ? r.json() : null).catch(() => null)
-        );
+        // Step 3: Scrape subpages in parallel IF we have them
+        let subpageResults = [];
+        if (pagesToScrape.length > 0) {
+            addDebugLog(`📄 Scraping additional pages: ${pagesToScrape.join(", ")}`);
+            const subpagePromises = pagesToScrape.map(pageUrl =>
+                fetch("https://api.firecrawl.dev/v1/scrape", {
+                    method: "POST",
+                    headers: fcHeaders,
+                    body: JSON.stringify({
+                        url: pageUrl,
+                        formats: ["markdown"],
+                        onlyMainContent: true
+                    })
+                }).then(r => r.ok ? r.json() : null).catch(() => null)
+            );
+            subpageResults = await Promise.all(subpagePromises);
+        }
 
-        const scrapeResults = await Promise.all(scrapePromises);
-
-        // Combine all markdown content
-        let combinedContent = "";
-        for (let i = 0; i < scrapeResults.length; i++) {
-            const result = scrapeResults[i];
+        // Combine all markdown content safely
+        const allResults = [homepageResult, targetPageResult, ...subpageResults].filter(Boolean);
+        let combinedParts = [];
+        for (let i = 0; i < allResults.length; i++) {
+            const result = allResults[i];
             if (result?.data?.markdown) {
-                const pageTitle = result.data.metadata?.title || pagesToScrape[i];
-                combinedContent += `\n\n=== PAGE: ${pageTitle} ===\n${result.data.markdown}`;
+                const pageTitle = result.data.metadata?.title || (i === 0 ? "Home" : i === 1 && url !== baseUrl ? "Target" : "Subpage");
+                // Avoid complex regex on untrusted/large strings
+                const md = result.data.markdown;
+                const cartIndex = md.indexOf("### Shopping Cart");
+                let cleaned = md;
+                if (cartIndex !== -1) {
+                    const checkoutIndex = md.indexOf("Checkout", cartIndex);
+                    if (checkoutIndex !== -1) {
+                        cleaned = md.substring(0, cartIndex) + md.substring(checkoutIndex + 8);
+                    }
+                }
+                combinedParts.push(`\n\n=== PAGE: ${pageTitle} ===\n${cleaned.substring(0, 10000)}`);
             }
         }
+        let combinedContent = combinedParts.join("");
 
         if (!combinedContent.trim()) {
             addDebugLog("⚠️ No content extracted from any page");
             return "General business excellence and high-quality service.";
         }
 
-        // Return raw markdown directly (the Retell LLM reads it perfectly)
-        // Trim to ~6000 chars to fit context window
-        const trimmed = combinedContent.substring(0, 6000);
+        const trimmed = combinedContent.substring(0, 20000);
         addDebugLog(`✅ Business context extracted (${trimmed.length} chars from ${pagesToScrape.length} pages)`);
         return trimmed;
 
@@ -193,9 +236,9 @@ app.post("/api/start-demo", async (req, res) => {
     }
 
     try {
-        // 1. Create/Update Lead in GHL
-        addDebugLog(`👤 Syncing lead: ${firstName} ${lastName || ""} (${companyName || "No Company"})`);
-        const contactRes = await fetch("https://services.leadconnectorhq.com/contacts/upsert", {
+        // 1 & 2: Sync lead and Scrape context in parallel
+        addDebugLog(`👤 Syncing lead and scraping context in parallel...`);
+        const contactPromise = fetch("https://services.leadconnectorhq.com/contacts/upsert", {
             method: "POST",
             headers: getGhlHeaders(),
             body: JSON.stringify({
@@ -211,9 +254,21 @@ app.post("/api/start-demo", async (req, res) => {
             })
         });
 
-        // 2. Scrape Website for Context
-        const businessContext = await scrapeBusinessContext(websiteURL);
-        addDebugLog("📝 Context extracted successfully.");
+        const scrapePromise = scrapeBusinessContext(websiteURL);
+
+        const [contactResponse, businessContext] = await Promise.all([contactPromise, scrapePromise]);
+
+        let contactId = null;
+        if (contactResponse.ok) {
+            const contactData = await contactResponse.json();
+            contactId = contactData?.contact?.id;
+            addDebugLog(`✅ GHL Contact Synced: ${contactId}`);
+        } else {
+            const err = await contactResponse.text();
+            addDebugLog(`⚠️ GHL Sync failed: ${err}`);
+        }
+
+        addDebugLog("✅ Sync and scrape completed.");
 
         // 3. Initialize Personalized Retell Session
         addDebugLog("🎙️ Initializing personalized Retell session...");
@@ -237,6 +292,7 @@ app.post("/api/start-demo", async (req, res) => {
                     "contact_last_name": lastName || "",
                     "contact_phone": phone,
                     "contact_email": email || "",
+                    "contact_id": contactId || "",
                     "contact_company_name": companyName || "your business",
                     "business_context": businessContext,
                     "current_date": new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" }),
@@ -473,11 +529,12 @@ app.post("/api/book", async (req, res) => {
 app.post("/retell/check_availability", async (req, res) => {
     console.log("\n🤖 AI SEARCHING SLOTS...");
     const { args, call } = req.body;
+    const contactIdFromSession = args?.contact_id || call?.metadata?.contact_id;
     const phone = resolvePhone(req);
     const email = args?.email || call?.metadata?.email;
 
     // Detailed logging for phone resolution debugging
-    addDebugLog(`📞 Phone resolution: args.phone=${args?.phone}, call.from_number=${call?.from_number}, metadata.phone=${call?.metadata?.phone}, resolved=${phone}`);
+    addDebugLog(`📞 Session context: contact_id=${contactIdFromSession}, phone=${phone}, email=${email}`);
 
     const calendarId = process.env.GHL_CALENDAR_ID;
     const now = new Date();
@@ -491,13 +548,28 @@ app.post("/retell/check_availability", async (req, res) => {
         const slotsRes = await fetch(slotsUrl, { headers: getGhlHeaders() });
         const slotsData = await slotsRes.json();
 
+        addDebugLog(`Raw GHL Slots Days: ${Object.keys(slotsData).join(", ")}`);
+
         let availableSlots = [];
         const bufferTime = now.getTime() + (60 * 60 * 1000); // 1 hour buffer
+        addDebugLog(`Current Server Time: ${now.toISOString()} (${now.getTime()})`);
+        addDebugLog(`Buffer Time (now+1h): ${new Date(bufferTime).toISOString()} (${bufferTime})`);
 
         Object.keys(slotsData).forEach(day => {
             if (slotsData[day]?.slots) {
-                const futureSlots = slotsData[day].slots.filter(s => new Date(s).getTime() > bufferTime);
+                const daySlots = slotsData[day].slots;
+                const futureSlots = daySlots.filter(s => {
+                    const slotTime = new Date(s).getTime();
+                    const isFuture = slotTime > bufferTime;
+                    if (!isFuture && daySlots.length < 50) { // Log filtered slots if not too many
+                        addDebugLog(`   Filtering out past/near slot: ${s} (slotTime: ${slotTime}, buffer: ${bufferTime})`);
+                    }
+                    return isFuture;
+                });
+                addDebugLog(`Day ${day}: ${daySlots.length} total, ${futureSlots.length} future`);
                 availableSlots.push(...futureSlots);
+            } else if (day !== 'traceId') {
+                addDebugLog(`⚠️ Day ${day} has no slots property: ${JSON.stringify(slotsData[day])}`);
             }
         });
 
@@ -507,44 +579,55 @@ app.post("/retell/check_availability", async (req, res) => {
         let existingAppointments = [];
         let contactName = null;
 
-        if (phone || email) {
-            const contact = await findContactByPhoneOrEmail(phone, email);
-            if (contact) {
-                contactName = contact.firstName || null;
-                addDebugLog(`Found contact: ${contact.firstName} ${contact.lastName || ""} (${contact.id})`);
-
-                // Use calendar events endpoint (contacts/{id}/appointments returns empty!)
-                const futureMs = now.getTime() + 30 * 24 * 60 * 60 * 1000;
-                const eventsUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${futureMs}`;
-                const eRes = await fetch(eventsUrl, { headers: getGhlHeaders() });
-                const eData = await eRes.json();
-                const events = eData?.events || [];
-
-                existingAppointments = events
-                    .filter(e => {
-                        const status = (e.appointmentStatus || e.status || "").toLowerCase();
-                        return e.contactId === contact.id &&
-                            (status === 'booked' || status === 'confirmed' || status === 'new');
-                    })
-                    .map(e => ({
-                        appointment_id: e.id,
-                        time: e.startTime,
-                        title: e.title || "Appointment"
-                    }));
-            } else {
-                addDebugLog(`❌ No contact found for phone=${phone}, email=${email}`);
+        let contact = null;
+        if (contactIdFromSession) {
+            const cRes = await fetch(`https://services.leadconnectorhq.com/contacts/${contactIdFromSession}`, { headers: getGhlHeaders() });
+            if (cRes.ok) {
+                const cData = await cRes.json();
+                contact = cData.contact;
             }
         }
 
-        addDebugLog(`Result: ${availableSlots.length} slots, ${existingAppointments.length} existing appointments, contact=${contactName}`);
+        if (!contact && (phone || email)) {
+            contact = await findContactByPhoneOrEmail(phone, email);
+        }
 
-        res.json({
-            available_slots: availableSlots.slice(0, 5),
+        if (contact) {
+            contactName = contact.firstName || null;
+            addDebugLog(`Found contact: ${contact.firstName} ${contact.lastName || ""} (${contact.id})`);
+
+            // Use calendar events endpoint (contacts/{id}/appointments returns empty!)
+            const futureMs = now.getTime() + 30 * 24 * 60 * 60 * 1000;
+            const eventsUrl = `https://services.leadconnectorhq.com/calendars/events?locationId=${process.env.GHL_LOCATION_ID}&calendarId=${calendarId}&startTime=${now.getTime()}&endTime=${futureMs}`;
+            const eRes = await fetch(eventsUrl, { headers: getGhlHeaders() });
+            const eData = await eRes.json();
+            const events = eData?.events || [];
+
+            existingAppointments = events
+                .filter(e => {
+                    const status = (e.appointmentStatus || e.status || "").toLowerCase();
+                    return e.contactId === contact.id &&
+                        (status === 'booked' || status === 'confirmed' || status === 'new');
+                })
+                .map(e => ({
+                    appointment_id: e.id,
+                    time: e.startTime,
+                    title: e.title || "Appointment"
+                }));
+        } else {
+            addDebugLog(`❌ No contact found for phone=${phone}, email=${email}`);
+        }
+        const responsePayload = {
+            available_slots: availableSlots.slice(0, 8), // Offer more slots
+            slots: availableSlots.slice(0, 8),          // Alias for compatibility
             existing_appointments: existingAppointments,
             contact_name: contactName,
             current_date: new Date().toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric", timeZone: "America/New_York" }),
             current_time: new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: "America/New_York" })
-        });
+        };
+
+        addDebugLog(`✅ Sending ${responsePayload.available_slots.length} slots to AI. (Total found: ${availableSlots.length})`);
+        res.json(responsePayload);
     } catch (err) {
         console.error("❌ Availability Error:", err.message);
         addDebugLog(`❌ Availability Error: ${err.message}`);
@@ -570,11 +653,13 @@ app.post("/retell/book_appointment", async (req, res) => {
     }
 
     try {
-        let contactId = null;
+        let contactId = args?.contact_id || call?.metadata?.contact_id;
 
-        // Search for existing contact robustly
-        const existing = await findContactByPhoneOrEmail(phone, email);
-        if (existing) contactId = existing.id;
+        // Search for existing contact robustly if ID is missing
+        if (!contactId) {
+            const existing = await findContactByPhoneOrEmail(phone, email);
+            if (existing) contactId = existing.id;
+        }
 
         // Upsert Contact
         if (contactId) {
@@ -932,7 +1017,21 @@ app.post("/retell/update_contact_info", async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`\n🚀 GHL Scheduler Debug App running at http://localhost:${PORT}`);
-    console.log(`📁 Serving files from: ${join(__dirname, "public")}`);
-});
+const keyPath = join(__dirname, "key.pem");
+const certPath = join(__dirname, "cert.pem");
+
+if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+    const options = {
+        key: fs.readFileSync(keyPath),
+        cert: fs.readFileSync(certPath),
+    };
+    https.createServer(options, app).listen(PORT, () => {
+        console.log(`\n🚀 GHL Scheduler Debug App running at https://localhost:${PORT}`);
+        console.log(`📁 Serving files from: ${join(__dirname, "public")}`);
+    });
+} else {
+    app.listen(PORT, () => {
+        console.log(`\n🚀 GHL Scheduler Debug App running at http://localhost:${PORT}`);
+        console.log(`📁 Serving files from: ${join(__dirname, "public")}`);
+    });
+}
